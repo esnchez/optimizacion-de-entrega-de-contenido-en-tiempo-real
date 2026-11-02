@@ -1,0 +1,73 @@
+# Prueba de conexiones simultáneas (PROFILE=connections de local.js) dentro del clúster.
+# Ataca al Service del servicio directamente (balanceo L4 de kube-proxy), no al Ingress: así
+# cada conexión de k6 es una conexión en un pod, como detrás de un NLB en producción. A través de
+# ingress-nginx los pods solo verían el pool keep-alive de nginx, no a los usuarios.
+# Se lanza con Task, que crea los ConfigMaps (script y parámetros) y sigue los logs:
+#   task load:capacity    ejecución A: 1 pod, CONNECTIONS=4500, STEPS=3
+#   task load:scaling     ejecución B: HPA 2-6, CONNECTIONS=3000, STEPS=3
+# Duración por defecto: STEPS x (STEP_RAMP + STEP_HOLD) + 1 min = 13 min.
+# Procedimiento completo (capacidad por pod y escalado): docs/pruebas.md.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-connections
+  namespace: cdn
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: k6
+          image: grafana/k6:2.3.0
+          args: ["run", "--quiet", "--out", "experimental-prometheus-rw", "/scripts/local.js"]
+          env:
+            - name: PROFILE
+              value: connections
+            - name: BASE_URL
+              value: http://content-delivery.cdn.svc.cluster.local
+            - name: STEP_RAMP
+              value: 1m
+            - name: STEP_HOLD
+              value: 3m
+            # Segundos entre segmentos por espectador: CONNECTIONS / THINK_TIME = peticiones/s.
+            - name: THINK_TIME
+              value: "6"
+            - name: K6_PROMETHEUS_RW_SERVER_URL
+              value: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+            - name: K6_FEATURES
+              value: native-histograms
+            - name: K6_PROMETHEUS_RW_PUSH_INTERVAL
+              value: 5s
+          # CONNECTIONS (conexiones al final del último escalón) y STEPS vienen del ConfigMap
+          # k6-connections-params que crea Task. 4500 es el máximo que aguanta el nodo de minikube
+          # (4 cores / 6 GB) con k6 y la monitorización dentro: con 4500, k6 usa ~1.7 GiB (reserva
+          # todos los VUs al arrancar) y el nodo llega a 5.6 de 6 GiB (docs/pruebas.md, ejecución A).
+          # Otros límites: ~28 000 puertos efímeros por pod de k6.
+          envFrom:
+            - configMapRef:
+                name: k6-connections-params
+          resources:
+            requests:
+              cpu: "1500m"
+              memory: 1536Mi
+            # Límite para que k6 no deje sin memoria al nodo (y a Prometheus) si se pide demasiado.
+            limits:
+              memory: 2560Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: k6-script

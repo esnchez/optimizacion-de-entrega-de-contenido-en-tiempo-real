@@ -1,0 +1,39 @@
+# Overlay para AWS EKS. ESQUELETO SIN DESPLEGAR: valores marcados con <...> a completar.
+# Diferencias con local: S3 real (sin S3_ENDPOINT), credenciales vía IRSA (sin Secret),
+# más réplicas e imagen desde ECR. Ver docs/operaciones/kubernetes.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+configMapGenerator:
+  - name: content-delivery-config
+    namespace: cdn
+    behavior: merge
+    literals:
+      - S3_BUCKET=<bucket-de-contenido>
+      - AWS_REGION=<region>
+
+images:
+  - name: content-delivery
+    newName: <cuenta>.dkr.ecr.<region>.amazonaws.com/content-delivery
+    newTag: "0.1.0"
+
+patches:
+  # IRSA: el pod asume este rol IAM (solo s3:GetObject + s3:ListBucket sobre el bucket).
+  - target:
+      kind: ServiceAccount
+      name: content-delivery
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          eks.amazonaws.com/role-arn: arn:aws:iam::<cuenta>:role/content-delivery
+  - target:
+      kind: Ingress
+      name: content-delivery
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: <dominio-publico>

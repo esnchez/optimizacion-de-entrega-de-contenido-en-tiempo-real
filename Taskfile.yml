@@ -1,0 +1,373 @@
+# Punto de entrada para pruebas, entorno, despliegue y pruebas de carga. `task` (o `task --list`)
+# muestra todas las tareas. Requiere Task 3.x (https://taskfile.dev). Funciona igual en Windows
+# (PowerShell o Git Bash), Linux y macOS: los comandos los ejecuta el intérprete propio de Task.
+version: "3"
+
+vars:
+  COMPOSE: docker compose -f src/tests/compose.yaml
+  # --ignored: las pruebas e2e están marcadas #[ignore] para que `cargo test` no las lance.
+  # --test-threads=1: varias pruebas cuentan llamadas a S3 con las métricas del servicio.
+  E2E: cargo test --test e2e -- --ignored --test-threads=1
+
+tasks:
+  default:
+    silent: true
+    cmds:
+      - task --list
+
+  # ---------------------------------------------------------------------------------------------
+  # Desarrollo
+  # ---------------------------------------------------------------------------------------------
+
+  test:
+    desc: Pruebas unitarias
+    dir: src
+    cmds:
+      - cargo test
+
+  lint:
+    desc: Formato y clippy
+    dir: src
+    cmds:
+      - cargo fmt --check
+      - cargo clippy --all-targets -- -D warnings
+
+  env:up:
+    desc: Arranca LocalStack (S3) en Docker para desarrollo
+    cmds:
+      - "{{.COMPOSE}} up -d --wait localstack"
+
+  env:seed:
+    desc: "Sube a LocalStack (Docker) los objetos fijos que usan k6 y la prueba de apagado"
+    cmds:
+      # Mismos objetos que el script de inicialización de LocalStack en minikube. Las pruebas e2e no
+      # los necesitan: crean sus propios objetos.
+      - >-
+        {{.COMPOSE}} exec localstack sh -c "awslocal s3 mb s3://content 2>/dev/null;
+        printf 'hello world' > /tmp/hello.txt && awslocal s3 cp --only-show-errors /tmp/hello.txt s3://content/hello.txt --content-type text/plain &&
+        head -c 65536 /dev/urandom > /tmp/segment.bin && awslocal s3 cp --only-show-errors /tmp/segment.bin s3://content/videos/segment.bin --content-type video/mp2t &&
+        head -c 3145728 /dev/urandom > /tmp/big.bin && awslocal s3 cp --only-show-errors /tmp/big.bin s3://content/videos/big.bin --content-type application/octet-stream"
+
+  env:down:
+    desc: Para y borra el entorno de Docker de las pruebas
+    cmds:
+      - "{{.COMPOSE}} --profile app down"
+
+  run:
+    desc: Ejecuta el servicio en el host contra LocalStack (necesita `task env:up`)
+    dir: src
+    env:
+      S3_BUCKET: content
+      S3_ENDPOINT: http://127.0.0.1:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      METADATA_CACHE_TTL_SECS: "2"
+      BODY_CACHE_TTL_SECS: "2"
+      MAX_CONNECTION_AGE_SECS: "3"
+    cmds:
+      - cargo run
+
+  # ---------------------------------------------------------------------------------------------
+  # Pruebas end-to-end (src/tests/e2e.rs)
+  # ---------------------------------------------------------------------------------------------
+
+  e2e:
+    desc: "E2E completo: LocalStack + imagen del servicio en Docker, pruebas y limpieza (~10 min la primera compilación)"
+    cmds:
+      - "{{.COMPOSE}} --profile app up -d --build --wait"
+      - defer: "{{.COMPOSE}} --profile app down"
+      - task: e2e:run
+        vars:
+          BASE_URL: http://127.0.0.1:8089
+          # El servicio firma URLs para http://localstack:4566, que no se resuelve desde el host.
+          FOLLOW_PRESIGN: "0"
+
+  e2e:dev:
+    desc: "E2E contra el servicio en el host (`task env:up` y `task run` en otra terminal)"
+    cmds:
+      - task: e2e:run
+        vars:
+          BASE_URL: http://127.0.0.1:8080
+          FOLLOW_PRESIGN: "1"
+
+  e2e:cluster:
+    desc: "E2E contra minikube a través del Ingress (`task cluster:forward` en otra terminal)"
+    preconditions:
+      - sh: curl -sf http://127.0.0.1:18080/readyz > /dev/null
+        msg: "Falta el port-forward a un pod. Ejecuta `task cluster:forward` en otra terminal."
+      - sh: curl -sf http://127.0.0.1:4567/_localstack/health > /dev/null
+        msg: "Falta el port-forward a LocalStack. Ejecuta `task cluster:forward` en otra terminal."
+    cmds:
+      - task: e2e:run
+        vars:
+          BASE_URL: http://cdn.local:8080
+          RESOLVE: cdn.local=127.0.0.1:8080
+          OPS_URL: http://127.0.0.1:18080
+          S3_ENDPOINT: http://127.0.0.1:4567
+          # Valores del overlay local: la prueba de actualización espera 61 s y la de reciclado
+          # hasta ~2 min.
+          CACHE_TTL_SECS: "60"
+          MAX_CONNECTION_AGE_SECS: "120"
+          FOLLOW_PRESIGN: "0"
+
+  e2e:run:
+    internal: true
+    dir: src
+    env:
+      BASE_URL: "{{.BASE_URL}}"
+      OPS_URL: "{{.OPS_URL | default .BASE_URL}}"
+      RESOLVE: "{{.RESOLVE}}"
+      S3_ENDPOINT: "{{.S3_ENDPOINT | default \"http://127.0.0.1:4566\"}}"
+      CACHE_TTL_SECS: "{{.CACHE_TTL_SECS | default \"2\"}}"
+      MAX_CONNECTION_AGE_SECS: "{{.MAX_CONNECTION_AGE_SECS | default \"3\"}}"
+      FOLLOW_PRESIGN: "{{.FOLLOW_PRESIGN}}"
+    cmds:
+      - "{{.E2E}}"
+
+  # ---------------------------------------------------------------------------------------------
+  # Clúster local (minikube)
+  # ---------------------------------------------------------------------------------------------
+
+  deploy:local:
+    desc: Construye la imagen, la carga en minikube y aplica el overlay local (sin cambios en el código, no reinicia nada)
+    vars:
+      CONTEXT:
+        sh: kubectl config current-context
+    preconditions:
+      - sh: minikube status > /dev/null
+        msg: "minikube no está arrancado: minikube start --driver=docker --cpus=4 --memory=6g --addons=ingress,metrics-server"
+      - sh: '[ "{{.CONTEXT}}" = "minikube" ]'
+        msg: "kubectl apunta a '{{.CONTEXT}}', no a minikube: kubectl config use-context minikube"
+    cmds:
+      # La caché de capas de Docker hace que esto tarde segundos si el código no ha cambiado.
+      # --provenance=false: Docker Desktop adjunta metadatos de procedencia con la hora del build, y
+      # el ID de la imagen cambiaría en cada build aunque todo saliera de la caché.
+      - docker build --provenance=false -t content-delivery:local src
+      # Tarea aparte para que el ID de la imagen se lea después de construirla.
+      - task: deploy:local:apply
+
+  deploy:local:apply:
+    internal: true
+    vars:
+      # Etiqueta única por contenido: el ID de la imagen. Una etiqueta fija ("local") no cambiaría el
+      # Deployment y Kubernetes no reiniciaría los pods; con el ID, una imagen igual no reinicia nada
+      # y una distinta hace un rolling update (y `kubectl rollout undo` vuelve a la anterior).
+      IMAGE_ID:
+        sh: docker images -q content-delivery:local
+      TAG: dev-{{.IMAGE_ID}}
+    cmds:
+      - task: image:load
+        vars: { IMAGE: content-delivery, TAG: "{{.TAG}}" }
+      # Overlay temporal sobre src/k8s/overlays/local que solo cambia la etiqueta de la imagen: lo
+      # mismo que hacía `sed` en el antiguo deploy.sh, pero con el mecanismo propio de Kustomize.
+      - mkdir -p .task/deploy-local
+      - >-
+        printf 'resources:\n  - ../../src/k8s/overlays/local\nimages:\n  - name: content-delivery\n    newTag: %s\n'
+        "{{.TAG}}" > .task/deploy-local/kustomization.yaml
+      - kubectl apply -k .task/deploy-local
+      - kubectl -n localstack rollout status deploy/localstack --timeout=300s
+      - kubectl -n cdn rollout status deploy/content-delivery --timeout=300s
+      - kubectl -n cdn get pods,svc,ingress,hpa
+
+  image:load:
+    internal: true
+    # Carga {{.IMAGE}}:local en minikube como {{.IMAGE}}:{{.TAG}}. Se salta si minikube ya tiene esa
+    # etiqueta (misma imagen que en el despliegue anterior). El nodo de minikube usa containerd: se
+    # consulta con crictl, no con docker.
+    status:
+      - minikube ssh -- sudo crictl inspecti docker.io/library/{{.IMAGE}}:{{.TAG}} > /dev/null
+    cmds:
+      - docker tag {{.IMAGE}}:local {{.IMAGE}}:{{.TAG}}
+      - minikube image load {{.IMAGE}}:{{.TAG}}
+      # "{{.IMAGE}}:local" también en minikube, para quien aplique los manifiestos con `kubectl apply -k`.
+      - minikube image tag {{.IMAGE}}:{{.TAG}} {{.IMAGE}}:local
+
+  # ---------------------------------------------------------------------------------------------
+  # Temporal (src/temporal, src/k8s/temporal; guía en docs/operaciones/temporal.md)
+  # ---------------------------------------------------------------------------------------------
+
+  temporal:test:
+    desc: Pruebas del workflow con el entorno de pruebas de Temporal (sin servidor)
+    dir: src/temporal
+    cmds:
+      - go vet ./...
+      - go test ./...
+
+  temporal:deploy:
+    desc: Despliega el servidor de desarrollo de Temporal y el worker en minikube
+    vars:
+      CONTEXT:
+        sh: kubectl config current-context
+    preconditions:
+      - sh: '[ "{{.CONTEXT}}" = "minikube" ]'
+        msg: "kubectl apunta a '{{.CONTEXT}}', no a minikube: kubectl config use-context minikube"
+    cmds:
+      - docker build --provenance=false -t temporal-worker:local src/temporal
+      - task: temporal:deploy:apply
+
+  temporal:deploy:apply:
+    internal: true
+    vars:
+      IMAGE_ID:
+        sh: docker images -q temporal-worker:local
+      TAG: dev-{{.IMAGE_ID}}
+    cmds:
+      - task: image:load
+        vars: { IMAGE: temporal-worker, TAG: "{{.TAG}}" }
+      - mkdir -p .task/deploy-temporal
+      - >-
+        printf 'resources:\n  - ../../src/k8s/temporal\nimages:\n  - name: temporal-worker\n    newTag: %s\n'
+        "{{.TAG}}" > .task/deploy-temporal/kustomization.yaml
+      - kubectl apply -k .task/deploy-temporal
+      - kubectl -n temporal rollout status deploy/temporal --timeout=300s
+      - kubectl -n temporal rollout status deploy/temporal-worker --timeout=300s
+      - kubectl -n temporal get pods
+
+  temporal:ui:
+    desc: Abre la UI de Temporal en http://localhost:8233 (se queda en primer plano)
+    cmds:
+      - kubectl -n temporal port-forward svc/temporal 8233:8233
+
+  temporal:prescale:
+    desc: "Lanza PrescaleForEvent: sube el mínimo del HPA a MIN (4) durante HOLD segundos (180). Ej.: task temporal:prescale MIN=5 HOLD=300"
+    vars:
+      MIN: '{{.MIN | default "4"}}'
+      HOLD: '{{.HOLD | default "180"}}'
+      ID: prescale-{{now | date "20060102-150405"}}
+    cmds:
+      # La CLI de Temporal ya está en la imagen del servidor: no hace falta instalarla en el host.
+      # --address 127.0.0.1: "localhost" resuelve también a ::1 (IPv6), donde el servidor no escucha.
+      - >-
+        kubectl -n temporal exec deploy/temporal -- temporal workflow start --address 127.0.0.1:7233
+        --task-queue operations --type PrescaleForEvent --workflow-id {{.ID}}
+        --input '{"Namespace":"cdn","HPA":"content-delivery","Deployment":"content-delivery","MinReplicas":{{.MIN}},"HoldSeconds":{{.HOLD}}}'
+      - echo "Síguelo en la UI (task temporal:ui) o con task temporal:describe ID={{.ID}}"
+
+  temporal:describe:
+    desc: "Estado e historial de un workflow: task temporal:describe ID=prescale-..."
+    requires:
+      vars: [ID]
+    cmds:
+      - kubectl -n temporal exec deploy/temporal -- temporal workflow describe --address 127.0.0.1:7233 --workflow-id {{.ID}}
+      - kubectl -n temporal exec deploy/temporal -- temporal workflow show --address 127.0.0.1:7233 --workflow-id {{.ID}}
+
+  temporal:list:
+    desc: Lista los workflows recientes y su estado
+    cmds:
+      - kubectl -n temporal exec deploy/temporal -- temporal workflow list --address 127.0.0.1:7233 --limit 10
+
+  temporal:schedule:
+    desc: "Crea un Schedule que lanza PrescaleForEvent cada día a las 19:50 UTC, 10 min antes de un estreno a las 20:00"
+    cmds:
+      - >-
+        kubectl -n temporal exec deploy/temporal -- temporal schedule create --address 127.0.0.1:7233
+        --schedule-id prescale-daily --cron "50 19 * * *"
+        --task-queue operations --type PrescaleForEvent --workflow-id prescale-daily
+        --input '{"Namespace":"cdn","HPA":"content-delivery","Deployment":"content-delivery","MinReplicas":4,"HoldSeconds":3600}'
+      - kubectl -n temporal exec deploy/temporal -- temporal schedule describe --address 127.0.0.1:7233 --schedule-id prescale-daily
+
+  temporal:schedule:delete:
+    desc: Borra el Schedule diario creado con temporal:schedule
+    cmds:
+      - kubectl -n temporal exec deploy/temporal -- temporal schedule delete --address 127.0.0.1:7233 --schedule-id prescale-daily
+
+  deploy:eks:
+    desc: Aplica el overlay de EKS (la imagen debe estar ya publicada en ECR)
+    vars:
+      CONTEXT:
+        sh: kubectl config current-context
+      RENDERED:
+        sh: kubectl kustomize src/k8s/overlays/eks
+    preconditions:
+      - sh: '{{if contains "<" .RENDERED}}false{{else}}true{{end}}'
+        msg: "El overlay de EKS aún tiene valores <...> sin completar (src/k8s/overlays/eks/kustomization.yaml)"
+      - sh: '[ "{{.CONTEXT}}" != "minikube" ]'
+        msg: "kubectl apunta a minikube: cambia al contexto del clúster de EKS"
+    prompt: "¿Aplicar el overlay de EKS en el contexto '{{.CONTEXT}}'?"
+    cmds:
+      - kubectl apply -k src/k8s/overlays/eks
+      - kubectl -n cdn rollout status deploy/content-delivery --timeout=300s
+      - kubectl -n cdn get pods,svc,ingress,hpa
+
+  monitoring:install:
+    desc: Instala o actualiza Prometheus, Grafana, Prometheus Adapter, dashboard y métricas del Ingress
+    vars:
+      INGRESS_ARGS:
+        sh: kubectl -n ingress-nginx get deploy ingress-nginx-controller -o jsonpath='{.spec.template.spec.containers[0].args}'
+    cmds:
+      - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+      - >-
+        helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack
+        --version 92.10.1 -n monitoring --create-namespace
+        -f src/k8s/monitoring/kube-prometheus-stack-values.yaml --wait
+      - >-
+        helm upgrade --install prometheus-adapter prometheus-community/prometheus-adapter
+        --version 5.3.0 -n monitoring -f src/k8s/monitoring/prometheus-adapter-values.yaml --wait
+      - kubectl apply -k src/k8s/monitoring
+      # El addon de ingress de minikube trae las métricas apagadas, y reiniciar minikube las vuelve
+      # a apagar. Solo se parchea si falta el flag (aplicarlo dos veces duplicaría el argumento).
+      - '{{if not (contains "enable-metrics=true" .INGRESS_ARGS)}}kubectl -n ingress-nginx patch deploy ingress-nginx-controller --type=json -p ''[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--enable-metrics=true"}]''{{else}}echo "ingress-nginx ya tiene las métricas activadas"{{end}}'
+
+  grafana:
+    desc: Abre Grafana en http://localhost:3000 (admin / admin); se queda en primer plano
+    cmds:
+      - kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+
+  cluster:forward:
+    desc: "Port-forwards para `task e2e:cluster`: Ingress :8080, un pod :18080, LocalStack :4567 (primer plano)"
+    deps: [forward:ingress, forward:pod, forward:localstack]
+
+  forward:ingress:
+    internal: true
+    cmds:
+      - kubectl -n ingress-nginx port-forward svc/ingress-nginx-controller 8080:80
+  forward:pod:
+    internal: true
+    cmds:
+      - kubectl -n cdn port-forward deploy/content-delivery 18080:8080
+  forward:localstack:
+    internal: true
+    cmds:
+      - kubectl -n localstack port-forward svc/localstack 4567:4566
+
+  # ---------------------------------------------------------------------------------------------
+  # Pruebas de carga en el clúster (k6 como Job; resultados en Grafana y en docs/pruebas.md)
+  # ---------------------------------------------------------------------------------------------
+
+  load:capacity:
+    desc: "Ejecución A: capacidad de un pod (HPA fijado a 1 réplica, 4 500 conexiones en 3 escalones, ~13 min)"
+    cmds:
+      - kubectl -n cdn patch hpa content-delivery --type=merge -p '{"spec":{"minReplicas":1,"maxReplicas":1}}'
+      # Se restaura aunque la prueba falle o se interrumpa.
+      - defer: kubectl -n cdn patch hpa content-delivery --type=merge -p '{"spec":{"minReplicas":2,"maxReplicas":6}}'
+      - task: load:connections
+        vars: { CONNECTIONS: "4500", STEPS: "3" }
+
+  load:scaling:
+    desc: "Ejecución B: el HPA escala por conexiones (2-6 réplicas, 3 000 conexiones en 3 escalones, ~13 min)"
+    cmds:
+      - task: load:connections
+        vars: { CONNECTIONS: "3000", STEPS: "3" }
+
+  load:connections:
+    internal: true
+    cmds:
+      - kubectl -n cdn create configmap k6-script --from-file=local.js=loadtest/local.js --dry-run=client -o yaml | kubectl apply -f -
+      - >-
+        kubectl -n cdn create configmap k6-connections-params
+        --from-literal=CONNECTIONS={{.CONNECTIONS}} --from-literal=STEPS={{.STEPS}}
+        --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n cdn delete job k6-connections --ignore-not-found
+      - kubectl -n cdn apply -f loadtest/k8s-job-connections.yaml
+      - kubectl -n cdn wait --for=condition=ready pod -l job-name=k6-connections --timeout=180s
+      - kubectl -n cdn logs -f job/k6-connections
+
+  load:rps:
+    desc: "Peticiones por segundo que suben y bajan a través del Ingress (PROFILE=scaling, ~16 min)"
+    cmds:
+      - kubectl -n cdn create configmap k6-script --from-file=local.js=loadtest/local.js --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n cdn delete job k6 --ignore-not-found
+      - kubectl -n cdn apply -f loadtest/k8s-job.yaml
+      - kubectl -n cdn wait --for=condition=ready pod -l job-name=k6 --timeout=180s
+      - kubectl -n cdn logs -f job/k6

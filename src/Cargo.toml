@@ -1,0 +1,57 @@
+[package]
+name = "content-delivery"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Scalable HTTP edge service that delivers S3 objects to many concurrent users"
+publish = false
+
+# The Dockerfile runs `/usr/local/cargo/bin/app`, so the binary keeps that name.
+[[bin]]
+name = "app"
+path = "src/main.rs"
+
+[dependencies]
+# --- Async runtime -----------------------------------------------------------
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
+bytes = "1.12.1"
+
+# --- HTTP server stack (hyper underneath) ------------------------------------
+axum = { version = "0.8.9", features = ["http1", "http2", "tokio", "macros"] }
+tower = { version = "0.5.3", features = ["limit", "load-shed", "util", "timeout"] }
+tower-http = { version = "0.7.1", features = ["trace", "timeout", "request-id", "util", "cors"] }
+
+# --- AWS S3 ------------------------------------------------------------------
+aws-config = { version = "1.12.0", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1.152.0", features = ["rt-tokio"] }
+
+# --- Caching -----------------------------------------------------------------
+moka = { version = "0.12.16", features = ["future"] }
+
+# --- Observability -----------------------------------------------------------
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+metrics = { version = "0.24.6", default-features = false }
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+
+# --- Errors ------------------------------------------------------------------
+thiserror = "2.0.21"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+# The service is stateless and runs under Kubernetes: on a panic the process exits
+# and the pod restarts.
+panic = "abort"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[dev-dependencies]
+reqwest = { version = "0.13.5", default-features = false }

@@ -1,0 +1,45 @@
+# Decisiones de operaciones
+
+Kubernetes, imagen, monitorización, pruebas de carga y Temporal. Cada decisión importante, en el orden en que se tomó, con el motivo y dónde están los detalles.
+Cuando una decisión cambie, añade una entrada nueva que sustituya a la anterior en lugar de editar
+el historial. La numeración es común a todo el proyecto: las del servicio en Rust
+están en [servicio/decisiones.md](../servicio/decisiones.md).
+
+| # | Fecha | Decisión | Por qué (resumen) | Detalles |
+| --- | --- | --- | --- | --- |
+| 14 | 2026-10-19 | **Dockerfile multi-stage**, capa de dependencias en caché, runtime **distroless `cc-debian13:nonroot`** | Imagen de 64 MB, sin shell, sin root, muchas menos CVE que `debian:bookworm-slim` | [imagen-de-contenedor.md](imagen-de-contenedor.md) |
+| 17 | 2026-10-19 | **Temporal solo como plano de control**, nunca en el camino de las peticiones; worker en Go | La latencia de los workflows es incompatible con p99 < 50 ms; el SDK de Go es maduro | [temporal.md](temporal.md#otros-workflows-candidatos) |
+| 18 | 2026-10-19 | **minikube** (driver Docker) como clúster local | Coincide con el README; addons ingress + metrics-server | [kubernetes.md](kubernetes.md#preparación-del-clúster-local) |
+| 19 | 2026-10-19 | Base de **Kustomize** + overlays (`local`, `eks`), generador de ConfigMap con hash | Sin lenguaje de plantillas; los cambios de configuración disparan rollouts | [kubernetes.md](kubernetes.md#estructura) |
+| 20 | 2026-10-19 | Sin límite de CPU; límite de memoria calculado a partir de los ajustes de caché/stream | El throttling de CFS perjudica al p99; la memoria no se puede limitar con throttling | [kubernetes.md](kubernetes.md#el-deployment) |
+| 21 | 2026-10-19 | `preStop` sleep nativo de 5 s + `terminationGracePeriodSeconds: 60` + `maxUnavailable: 0` | Rollouts sin errores. Verificado: 0 fallos en 230k peticiones durante un reinicio. | [kubernetes.md](kubernetes.md#el-deployment) |
+| 22 | 2026-10-19 | Las probes nunca dependen de S3 | Una caída de S3 no debe provocar una tormenta de reinicios de pods | [kubernetes.md](kubernetes.md#el-deployment) |
+| 23 | 2026-10-19 | Pod Security `restricted` en `cdn`; sin root, FS de solo lectura, sin token de SA | Mínimo privilegio, aplicado en la admisión | [kubernetes.md](kubernetes.md#el-deployment) |
+| 24 | 2026-10-19 | HPA al 60% de CPU, escalado hacia arriba rápido y hacia abajo lento; PDB `maxUnavailable: 1` | Tráfico con picos; mantener las cachés calientes; drenado de nodos seguro | [kubernetes.md](kubernetes.md#autoescalado-y-disponibilidad) |
+| 25 | 2026-10-19 | El Ingress solo expone `/content` y `/url`; `proxy-buffering: off` | Los endpoints operativos se quedan internos; streaming con backpressure | [kubernetes.md](kubernetes.md#controlador-de-ingress) |
+| 26 | 2026-10-19 | ingress-nginx solo en local; ALB o Gateway API para EKS | ingress-nginx ha sido retirado upstream | [kubernetes.md](kubernetes.md#controlador-de-ingress) |
+| 27 | 2026-10-19 | LocalStack en su propio namespace `baseline`, fijado a 4.14.0, init idempotente con `subPath` | Necesita root; reproducible; sin `subPath` el script se ejecutaba dos veces | [kubernetes.md](kubernetes.md#localstack-en-el-clúster-solo-overlay-local) |
+| 28 | 2026-10-19 | Las pruebas de carga se ejecutan como un **Job de k6 dentro del clúster** a través del Ingress | Un port-forward sería el cuello de botella | [kubernetes.md](kubernetes.md#validar-el-despliegue) |
+| 29 | 2026-10-19 | **kube-prometheus-stack** con Helm (chart 92.10.1), Alertmanager y scraping del control plane desactivados | Paquete estándar; ligero en minikube | [monitorizacion.md](monitorizacion.md#decisiones) |
+| 30 | 2026-10-19 | **ServiceMonitor** (5 s) sustituye a las anotaciones `prometheus.io/*` | El operador ignora las anotaciones; detalle al segundo durante las pruebas | [monitorizacion.md](monitorizacion.md#decisiones) |
+| 31 | 2026-10-19 | **k6 → remote write de Prometheus**, latencia como histogramas nativos | Carga y reacción en una misma línea temporal; los gauges de trend-stat son acumulativos y engañosos | [monitorizacion.md](monitorizacion.md#decisiones) |
+| 33 | 2026-10-19 | **Dashboard como código**, cargado por el sidecar de Grafana | Versionado; los cambios hechos en la UI hay que exportarlos de vuelta | [monitorizacion.md](monitorizacion.md#cómo-leer-el-dashboard) |
+| 34 | 2026-10-19 | Métricas de ingress-nginx activadas parcheando el addon de minikube | La latencia en el borde muestra el tiempo pasado fuera del servicio | [monitorizacion.md](monitorizacion.md#instalación) |
+| 35 | 2026-10-19 | Las pruebas de carga para observación usan un perfil de **tasa de llegada** (`PROFILE=scaling`) | Tasa de peticiones fija como el tráfico real; los usuarios en bucle cerrado ocultan las ralentizaciones | [monitorizacion.md](monitorizacion.md#lanzar-una-prueba-de-carga-para-observarla) |
+| 36 | 2026-11-01 | **"5M" son conexiones simultáneas**, no peticiones/s; se mide la capacidad de un pod y se extrapola a la flota | Es lo que significa para un servicio de streaming; 5M de conexiones no caben en minikube | [pruebas.md](../pruebas.md#conexiones-simultáneas) |
+| 38 | 2026-11-01 | **HPA por conexiones abiertas por pod** vía Prometheus Adapter, con la CPU como red de seguridad. Sustituye a la métrica de la #24 (el comportamiento de escalado y el PDB se mantienen) | El objetivo son usuarios simultáneos; la CPU llega tarde en un servicio limitado por E/S | [kubernetes.md](kubernetes.md#autoescalado-y-disponibilidad) |
+| 39 | 2026-11-01 | La prueba de conexiones ataca al **Service (L4)**, no al Ingress; en producción, NLB delante de los pods | Detrás de un proxy L7 los pods solo ven su pool keep-alive, no a los usuarios | [kubernetes.md](kubernetes.md#autoescalado-y-disponibilidad) |
+| 40 | 2026-11-01 | Perfil de k6 **`connections`** por escalones; Job con 4 500 conexiones en 3 escalones y `THINK_TIME=6` (máximo del nodo de minikube) | Cada escalón da un punto para extrapolar; los valores salen del coste medido de k6 en minikube | [pruebas.md](../pruebas.md#conexiones-simultáneas) |
+| 42 | 2026-11-01 | **Objetivo de 6 000 conexiones por pod y request de CPU de 1 core** (250m en local) | Medido: ~38 KiB y ~0.09 milicores por conexión. Con 250m la CPU disparaba el HPA a ~1 700 conexiones; con 1 core queda como red de seguridad (~6 600) | [pruebas.md](../pruebas.md#conexiones-simultáneas) |
+| 45 | 2026-11-01 | **`deploy.sh` pasa al Taskfile** (`task deploy:local`, `task deploy:eks`) y se elimina; etiqueta `dev-<ID de la imagen>` y overlay temporal de Kustomize en lugar de `sed` | Un único punto de entrada, sin bash ni `sed` (funciona desde PowerShell); la etiqueta por contenido evita reinicios si nada cambió y mantiene `rollout undo`; comprobaciones previas de minikube, contexto de kubectl y valores `<...>` de EKS | [kubernetes.md](kubernetes.md#preparación-del-clúster-local) |
+| 46 | 2026-11-01 | **Primer workflow de Temporal: `PrescaleForEvent`**, con el servidor de desarrollo (`temporal server start-dev`, SQLite en emptyDir) y un worker en Go en Deployments aparte; métricas del SDK en Prometheus, dashboard y alertas; cliente mínimo de la API de Kubernetes en lugar de client-go | Caso pequeño y visible en el dashboard existente que ataca el retraso medido del HPA; el servidor de desarrollo basta para aprender (en producción: Temporal Cloud o Helm con base de datos); el foco en Temporal, no en client-go | [temporal.md](temporal.md) |
+| 47 | 2026-11-01 | **Lease en las anotaciones del HPA** para `PrescaleForEvent` (dueño, caducidad, mínimo original; concurrencia optimista con `resourceVersion`); una ejecución que lo encuentra ocupado termina como *skipped* | Dos ejecuciones solapadas dejaban el mínimo alto para siempre. Un ID de workflow fijo no basta (los Schedules añaden la hora al ID); el lock en el propio recurso protege ante cualquier origen. *Skipped* no es un fallo y no debe disparar alertas | [temporal.md](temporal.md#ejecuciones-solapadas-el-lease) |
+
+## Decisiones abiertas
+
+| Tema | Opciones | ¿Bloqueante? |
+| --- | --- | --- |
+| Ingress de producción | NLB (L4) directo a los pods para las conexiones de contenido (ver #39), y ALB o Gateway API si hace falta enrutado L7 | Antes de EKS |
+| CDN delante del origen | CloudFront; medir la tasa de aciertos y dimensionar el origen con el tráfico restante | **Sí, para 5M**: sin CDN el origen necesitaría ~440 Gb/s con segmentos de 64 KiB y ~15 Tb/s con vídeo HD ([pruebas.md](../pruebas.md#conclusiones-y-extrapolación)) |
+| Monitorización en producción | **Recomendado:** recogida en el clúster (recolector gestionado de AMP o Prometheus en modo agente) y almacenamiento, dashboards y alertas fuera: AMP + Amazon Managed Grafana ([monitorizacion.md](monitorizacion.md#monitorización-en-producción)). Alternativa: Prometheus con PVC dentro del clúster | Antes de EKS |
+| Métrica de conexiones para el HPA con AMP | Proxy de firma SigV4 delante de AMP para Prometheus Adapter, o KEDA con su scaler de Prometheus | Antes de EKS |

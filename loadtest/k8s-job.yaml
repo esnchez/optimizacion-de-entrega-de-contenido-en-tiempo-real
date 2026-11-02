@@ -1,0 +1,68 @@
+# k6 dentro del clúster, atacando el Ingress por su Service interno con Host: cdn.local.
+# Así la carga recorre el camino real (ingress-nginx -> Service -> pods) sin pasar por un
+# port-forward, que sería el cuello de botella.
+# Las métricas de k6 (VUs, req/s, latencia del cliente) se envían a Prometheus por remote write
+# y aparecen en el dashboard de Grafana junto a las del servicio.
+#   task load:rps    (crea el ConfigMap del script, lanza el Job y sigue los logs)
+# Perfil por defecto: "scaling" (~16 min). Para una prueba corta: PROFILE=steady.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6
+  namespace: cdn
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: k6
+          image: grafana/k6:2.3.0
+          args: ["run", "--quiet", "--out", "experimental-prometheus-rw", "/scripts/local.js"]
+          env:
+            - name: BASE_URL
+              value: http://ingress-nginx-controller.ingress-nginx.svc.cluster.local
+            - name: HOST_HEADER
+              value: cdn.local
+            - name: PROFILE
+              value: scaling
+            - name: PEAK_RPS
+              value: "1500"
+            - name: BASE_RPS
+              value: "100"
+            - name: VUS
+              value: "100"
+            - name: DURATION
+              value: "60s"
+            - name: RANGE_SHARE
+              value: "0"
+            - name: K6_PROMETHEUS_RW_SERVER_URL
+              value: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+            # Latencias como histogramas nativos: Prometheus calcula percentiles por ventana de
+            # tiempo (histogram_quantile sobre rate). Las "trend stats" (p99 como gauge) son
+            # acumuladas desde el inicio de la prueba y no muestran cuándo mejora la latencia.
+            - name: K6_FEATURES
+              value: native-histograms
+            - name: K6_PROMETHEUS_RW_PUSH_INTERVAL
+              value: 5s
+          resources:
+            requests:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: k6-script

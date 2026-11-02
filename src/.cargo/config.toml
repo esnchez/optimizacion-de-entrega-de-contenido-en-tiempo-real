@@ -1,0 +1,3 @@
+[env]
+# Default log level for `cargo run`; override with RUST_LOG.
+RUST_LOG = { value = "info,app=debug", force = false }

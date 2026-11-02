@@ -1,0 +1,5 @@
+# Pins the toolchain so local builds, CI and the Docker image all use the same compiler.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

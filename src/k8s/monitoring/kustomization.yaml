@@ -1,0 +1,23 @@
+# Recursos de monitorización propios. Requiere los CRDs de kube-prometheus-stack (instalar antes
+# el chart con kube-prometheus-stack-values.yaml). Ver docs/operaciones/monitorizacion.md.
+#   kubectl apply -k src/k8s/monitoring
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - servicemonitor-content-delivery.yaml
+  - ingress-nginx-metrics.yaml
+  - prometheusrule.yaml
+  - servicemonitor-temporal.yaml
+
+# El sidecar de Grafana carga cualquier ConfigMap con la etiqueta grafana_dashboard=1.
+configMapGenerator:
+  - name: grafana-dashboard-content-delivery
+    namespace: monitoring
+    files:
+      - dashboards/content-delivery.json
+      - dashboards/temporal.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1"

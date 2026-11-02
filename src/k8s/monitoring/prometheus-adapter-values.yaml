@@ -1,0 +1,33 @@
+# Prometheus Adapter (chart 5.3.0): expone métricas de Prometheus en la API custom.metrics.k8s.io
+# para que el HPA escale por conexiones abiertas por pod. Decisiones en docs/operaciones/monitorizacion.md.
+#   helm upgrade --install prometheus-adapter prometheus-community/prometheus-adapter \
+#     --version 5.3.0 -n monitoring -f src/k8s/monitoring/prometheus-adapter-values.yaml
+
+prometheus:
+  url: http://kube-prometheus-stack-prometheus.monitoring.svc
+  port: 9090
+
+# Las métricas de CPU/memoria (metrics.k8s.io) las sigue dando metrics-server: el adapter solo
+# publica nuestra métrica y no registra la API de recursos.
+rules:
+  default: false
+  custom:
+    # Gauge por pod: el HPA hace la media entre pods y la compara con averageValue.
+    - seriesQuery: 'http_connections_open{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: { resource: namespace }
+          pod: { resource: pod }
+      name:
+        as: http_connections_open
+      metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+# El scrape es cada 5 s; un relist de 30 s descubre antes los pods nuevos.
+metricsRelistInterval: 30s
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
