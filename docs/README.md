@@ -19,6 +19,18 @@ Resumen de las pruebas del 2026-10-19 al 2026-11-05; el detalle de cada ejecuci�
 cifras de capacidad son las del 2026-11-05, con k6 fuera del clúster; las del 2026-11-01 (k6 dentro
 del nodo) se mantienen en pruebas como referencia.
 
+### Veredicto
+
+**Se cumple todo lo que depende del servicio y se puede probar en local**: p99 < 50 ms (3 ms con
+6 000 conexiones por pod, 17 ms con 9 000), 0 errores en todas las pruebas, escalado por conexiones
+con reparto equilibrado entre pods, y un punto de saturación medido (9 000 conexiones por pod). **No
+se pueden demostrar las cifras de *Impacto* del README**: los 5M de conexiones son una extrapolación
+(~1 000 pods) que además exige una CDN delante por ancho de banda, y la mejora de 300 a 50 ms y el
+ahorro de 100 000 $/mes necesitan líneas base y un entorno de producción que no existen. El servicio
+en Rust no es lo que separa el proyecto de esos objetivos; lo son la infraestructura alrededor (CDN,
+NLB, EKS con escalado de nodos) y las mediciones en producción. Estado de cada fase y de cada
+objetivo: [estado](estado.md#objetivos-del-readme).
+
 ### Lo que demuestran las pruebas
 
 | Pregunta | Respuesta | Evidencia |
