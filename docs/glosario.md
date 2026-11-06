@@ -1,0 +1,66 @@
+# Glosario
+
+Términos usados en la documentación, agrupados por tema. La última columna enlaza los documentos
+donde aparece cada término.
+
+## Escalado y conexiones
+
+| Término | Significado | Aparece en |
+| --- | --- | --- |
+| **Conexión simultánea** | Usuario conectado a la vez que otros. El "5M" del README se refiere a esto, no a peticiones por segundo. | [estado](estado.md), [resumen](README.md), [decisiones (operaciones)](operaciones/decisiones.md), [pruebas](operaciones/pruebas.md) |
+| **Keep-alive** | Conexión HTTP que se reutiliza para varias peticiones en lugar de abrir una por petición. | [resumen](README.md), [api-http](servicio/api-http.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md) |
+| **HPA** | *HorizontalPodAutoscaler*: ajusta el número de pods según una métrica (aquí, conexiones abiertas por pod y CPU). | [estado](estado.md), [resumen](README.md), [api-http](servicio/api-http.md), [arquitectura](servicio/arquitectura.md), [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [dependencias](servicio/dependencias.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md), [manual-de-operaciones](operaciones/manual-de-operaciones.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md), [temporal](operaciones/temporal.md) |
+| **Prometheus Adapter** | Expone métricas de Prometheus a la API de métricas de Kubernetes para que el HPA las use. | [estado](estado.md), [resumen](README.md), [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md), [monitorizacion](operaciones/monitorizacion.md) |
+| **Edad máxima de conexión** | `MAX_CONNECTION_AGE_SECS`: pasado ese tiempo, la siguiente respuesta lleva `Connection: close` y el cliente se reconecta, quizá a otro pod. | [estado](estado.md), [resumen](README.md), [api-http](servicio/api-http.md), [arquitectura](servicio/arquitectura.md), [configuracion](servicio/configuracion.md), [decisiones (servicio)](servicio/decisiones.md), [dependencias](servicio/dependencias.md), [entorno-local](operaciones/entorno-local.md), [kubernetes](operaciones/kubernetes.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md) |
+| **Load shedding** | Descarte de carga: por encima de un límite de peticiones en curso se responde `503` al momento en lugar de encolar. | [estado](estado.md), [api-http](servicio/api-http.md), [arquitectura](servicio/arquitectura.md), [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [configuracion](servicio/configuracion.md), [decisiones (servicio)](servicio/decisiones.md), [dependencias](servicio/dependencias.md), [manual-de-operaciones](operaciones/manual-de-operaciones.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md) |
+| **Backpressure** | Contrapresión: un consumidor lento frena al productor en lugar de acumular datos en memoria. | [resumen](README.md), [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [decisiones (servicio)](servicio/decisiones.md), [estructuras-de-datos](servicio/estructuras-de-datos.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md) |
+| **PDB** | *PodDisruptionBudget*: cuántos pods pueden faltar a la vez durante un drenado de nodo. | [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md) |
+| **L4 / L7** | Balanceo por conexión TCP (L4, p. ej. NLB) frente a por petición HTTP (L7, p. ej. nginx o ALB). | [estado](estado.md), [resumen](README.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md), [pruebas](operaciones/pruebas.md) |
+| **CDN y origen** | Red de caché con puntos de presencia cerca de los usuarios; el origen (este servicio) solo sirve lo que la CDN no tiene. | [estado](estado.md), [resumen](README.md), [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md), [manual-de-operaciones](operaciones/manual-de-operaciones.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md), [temporal](operaciones/temporal.md) |
+| **Pre-escalado** | Subir el mínimo de pods antes de un evento conocido, porque el HPA reacciona tarde. | [estado](estado.md), [resumen](README.md), [arquitectura](servicio/arquitectura.md), [decisiones (operaciones)](operaciones/decisiones.md), [pruebas](operaciones/pruebas.md), [temporal](operaciones/temporal.md) |
+
+## Caché y S3
+
+| Término | Significado | Aparece en |
+| --- | --- | --- |
+| **Request coalescing** | Agrupación de peticiones: muchas peticiones simultáneas a una clave fría producen una sola llamada a S3. | [estado](estado.md), [resumen](README.md), [arquitectura](servicio/arquitectura.md), [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [decisiones (servicio)](servicio/decisiones.md), [dependencias](servicio/dependencias.md), [estructuras-de-datos](servicio/estructuras-de-datos.md), [pruebas](operaciones/pruebas.md) |
+| **Caché negativa** | Guardar también el "no encontrado" para que una avalancha de 404 no llegue a S3. | [arquitectura](servicio/arquitectura.md), [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [configuracion](servicio/configuracion.md), [decisiones (servicio)](servicio/decisiones.md), [pruebas](operaciones/pruebas.md) |
+| **ETag** | Identificador de versión de un objeto; permite responder `304 Not Modified` sin cuerpo. | [estado](estado.md), [api-http](servicio/api-http.md), [arquitectura](servicio/arquitectura.md), [decisiones (servicio)](servicio/decisiones.md), [estructuras-de-datos](servicio/estructuras-de-datos.md), [pruebas](operaciones/pruebas.md) |
+| **Range** | Petición de un fragmento de un objeto (`206 Partial Content`); siempre va a S3 en streaming. | [estado](estado.md), [arquitectura](servicio/arquitectura.md), [dependencias](servicio/dependencias.md), [pruebas](operaciones/pruebas.md) |
+| **URL prefirmada** | URL de S3 firmada y con caducidad; el cliente descarga directamente de S3 (`/url/{key}`). | [estado](estado.md), [api-http](servicio/api-http.md), [arquitectura](servicio/arquitectura.md), [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [decisiones (servicio)](servicio/decisiones.md), [dependencias](servicio/dependencias.md), [kubernetes](operaciones/kubernetes.md), [manual-de-operaciones](operaciones/manual-de-operaciones.md), [pruebas](operaciones/pruebas.md) |
+| **Stale-while-revalidate** | Servir una entrada caducada mientras se refresca en segundo plano. | [estado](estado.md), [decisiones (servicio)](servicio/decisiones.md), [pruebas](operaciones/pruebas.md) |
+| **LocalStack** | Emulador de servicios de AWS; aquí hace de S3 en Docker y en minikube. | [estado](estado.md), [arquitectura](servicio/arquitectura.md), [configuracion](servicio/configuracion.md), [decisiones (servicio)](servicio/decisiones.md), [dependencias](servicio/dependencias.md), [decisiones (operaciones)](operaciones/decisiones.md), [entorno-local](operaciones/entorno-local.md), [kubernetes](operaciones/kubernetes.md), [manual-de-operaciones](operaciones/manual-de-operaciones.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md) |
+| **IRSA** | *IAM Roles for Service Accounts*: credenciales de AWS para un pod sin claves estáticas. | [estado](estado.md), [configuracion](servicio/configuracion.md), [decisiones (servicio)](servicio/decisiones.md), [dependencias](servicio/dependencias.md), [kubernetes](operaciones/kubernetes.md) |
+
+## Kubernetes y contenedores
+
+| Término | Significado | Aparece en |
+| --- | --- | --- |
+| **Overlay de Kustomize** | Capa que modifica la base común para un entorno (`local`, `eks`). | [estado](estado.md), [arquitectura](servicio/arquitectura.md), [configuracion](servicio/configuracion.md), [decisiones (operaciones)](operaciones/decisiones.md), [imagen-de-contenedor](operaciones/imagen-de-contenedor.md), [kubernetes](operaciones/kubernetes.md), [pruebas](operaciones/pruebas.md) |
+| **configMapGenerator** | Genera el ConfigMap con un hash en el nombre: cambiar un valor dispara un rollout. | [configuracion](servicio/configuracion.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md), [manual-de-operaciones](operaciones/manual-de-operaciones.md) |
+| **Liveness / readiness** | Sondas: si el proceso responde (reiniciar si no) y si debe recibir tráfico. | [api-http](servicio/api-http.md), [concurrencia-y-escalado](servicio/concurrencia-y-escalado.md), [decisiones (servicio)](servicio/decisiones.md), [estructuras-de-datos](servicio/estructuras-de-datos.md), [kubernetes](operaciones/kubernetes.md), [manual-de-operaciones](operaciones/manual-de-operaciones.md), [monitorizacion](operaciones/monitorizacion.md) |
+| **preStop** | Acción antes del SIGTERM; aquí una pausa de 5 s para que el endpoint deje de recibir tráfico. | [estado](estado.md), [arquitectura](servicio/arquitectura.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md) |
+| **Distroless** | Imagen base sin shell ni gestor de paquetes, solo lo necesario para ejecutar el binario. | [resumen](README.md), [arquitectura](servicio/arquitectura.md), [decisiones (operaciones)](operaciones/decisiones.md), [imagen-de-contenedor](operaciones/imagen-de-contenedor.md), [kubernetes](operaciones/kubernetes.md), [manual-de-operaciones](operaciones/manual-de-operaciones.md), [pruebas](operaciones/pruebas.md) |
+| **Throttling de CFS** | El kernel pausa un contenedor que agota su límite de CPU hasta el siguiente periodo de 100 ms. | [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md) |
+
+## Medición
+
+| Término | Significado | Aparece en |
+| --- | --- | --- |
+| **p50 / p95 / p99** | Percentiles de latencia: el p99 es el valor que solo supera el 1 % de las peticiones. | [estado](estado.md), [resumen](README.md), [decisiones (servicio)](servicio/decisiones.md), [dependencias](servicio/dependencias.md), [decisiones (operaciones)](operaciones/decisiones.md), [kubernetes](operaciones/kubernetes.md), [manual-de-operaciones](operaciones/manual-de-operaciones.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md) |
+| **Tasa de llegada** | Modelo de carga abierto: k6 envía N peticiones por segundo aunque el sistema se ralentice. | [decisiones (operaciones)](operaciones/decisiones.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md) |
+| **VU** | Usuario virtual de k6; en el perfil `connections`, un espectador con su conexión. | [decisiones (servicio)](servicio/decisiones.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md) |
+| **Remote write** | Envío de métricas a Prometheus por push; k6 lo usa para que su carga y la del sistema compartan línea temporal. | [decisiones (operaciones)](operaciones/decisiones.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md) |
+| **Histograma nativo** | Histograma de Prometheus con buckets dinámicos; permite percentiles por ventana de tiempo. | [decisiones (operaciones)](operaciones/decisiones.md), [monitorizacion](operaciones/monitorizacion.md) |
+| **PSI** | *Pressure Stall Information*: tiempo que los procesos esperan CPU, memoria o E/S. | [resumen](README.md), [pruebas](operaciones/pruebas.md) |
+
+## Temporal
+
+| Término | Significado | Aparece en |
+| --- | --- | --- |
+| **Workflow** | Código determinista que decide qué hacer y en qué orden; su estado se reconstruye desde el historial. | [estado](estado.md), [resumen](README.md), [arquitectura](servicio/arquitectura.md), [dependencias](servicio/dependencias.md), [decisiones (operaciones)](operaciones/decisiones.md), [monitorizacion](operaciones/monitorizacion.md), [pruebas](operaciones/pruebas.md), [temporal](operaciones/temporal.md) |
+| **Activity** | Paso con efectos (aquí, la API de Kubernetes); se reintenta y debe ser idempotente. | [arquitectura](servicio/arquitectura.md), [temporal](operaciones/temporal.md) |
+| **Temporizador duradero** | Espera guardada en el servidor: sobrevive a que muera el worker. | [estado](estado.md), [temporal](operaciones/temporal.md) |
+| **Lease** | Bloqueo con caducidad en las anotaciones del HPA para que dos pre-escalados no se solapen. | [estado](estado.md), [arquitectura](servicio/arquitectura.md), [decisiones (operaciones)](operaciones/decisiones.md), [temporal](operaciones/temporal.md) |
+| **Schedule** | Lanzamiento periódico (cron) de un workflow, gestionado por el servidor. | [decisiones (operaciones)](operaciones/decisiones.md), [temporal](operaciones/temporal.md) |
+| **Replay** | Re-ejecución del workflow a partir de su historial para reconstruir su estado. | [temporal](operaciones/temporal.md) |

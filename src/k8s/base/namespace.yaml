@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cdn
-  labels:
-    # Pod Security Admission: rechaza pods que no cumplan el perfil "restricted"
-    # (no root, sin escalado de privilegios, capabilities eliminadas, seccomp).
-    pod-security.kubernetes.io/enforce: restricted
-    pod-security.kubernetes.io/enforce-version: latest

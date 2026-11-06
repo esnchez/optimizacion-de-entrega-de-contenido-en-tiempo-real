@@ -78,6 +78,31 @@ y el cliente ve una URL de S3.
 La separación en capas (`routes` → `content` → `storage`) permite sustituir S3 más adelante (p. ej. por un nivel
 de caché en disco local) tocando solo `storage.rs`.
 
+## Carpetas del repositorio
+
+```
+content-delivery/         # el servicio en Rust (crate content-delivery, binario app)
+├── Cargo.toml            # dependencias, perfil release, lints
+├── Cargo.lock            # versiones exactas de las dependencias (en el repo: es un binario)
+├── rust-toolchain.toml   # fija la toolchain stable + rustfmt/clippy
+├── rustfmt.toml          # reglas de formato
+├── .cargo/config.toml    # RUST_LOG por defecto para `cargo run`
+├── Dockerfile            # build multi-stage -> imagen distroless (operaciones/imagen-de-contenedor.md)
+├── src/                  # los módulos de la tabla de arriba
+└── tests/e2e.rs          # pruebas end-to-end contra LocalStack (operaciones/pruebas.md)
+temporal/                 # worker de Temporal en Go: workflow PrescaleForEvent (operaciones/temporal.md)
+├── workflow.go           # el workflow: lease, subir mínimo del HPA, esperar pods, mantener, restaurar
+├── activities.go         # las activities: llamadas a la API de Kubernetes (lease en anotaciones del HPA)
+├── kube.go               # cliente mínimo de la API de Kubernetes (token del ServiceAccount)
+├── main.go               # el worker: conexión, registro, métricas en :9090
+├── workflow_test.go      # pruebas con el entorno de pruebas de Temporal
+└── Dockerfile
+k8s/                      # Kustomize: base, overlays local/eks, monitoring, temporal (operaciones/kubernetes.md)
+loadtest/                 # k6.js y los Jobs de k6 en k8s/ (operaciones/pruebas.md)
+docker-compose.yml        # LocalStack + imagen del servicio (operaciones/entorno-local.md)
+Taskfile.yml              # punto de entrada: pruebas, entorno, despliegue, carga
+```
+
 ## Apagado ordenado
 
 Al recibir `SIGTERM` (lo que envía Kubernetes) el servicio:

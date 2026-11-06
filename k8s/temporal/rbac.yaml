@@ -1,0 +1,31 @@
+# Permisos mínimos del worker: leer y cambiar el HPA del servicio, y leer su Deployment. Solo en el
+# namespace "cdn" y solo esos objetos. Si falta un permiso, la activity recibe un 403, Temporal la
+# reintenta y el error se ve en la UI (es uno de los experimentos de docs/operaciones/temporal.md).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: temporal-worker-prescale
+  namespace: cdn
+rules:
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    resourceNames: ["content-delivery"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["content-delivery"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: temporal-worker-prescale
+  namespace: cdn
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: temporal-worker-prescale
+subjects:
+  - kind: ServiceAccount
+    name: temporal-worker
+    namespace: temporal

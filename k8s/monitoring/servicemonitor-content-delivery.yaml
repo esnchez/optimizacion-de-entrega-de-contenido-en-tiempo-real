@@ -1,0 +1,17 @@
+# Prometheus descubre los pods del servicio a través de su Service y scrapea /metrics de cada
+# pod (no a través del Ingress, que no expone /metrics).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: content-delivery
+  namespace: cdn
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: content-delivery
+  endpoints:
+    - port: http
+      path: /metrics
+      # 5s (frente a 15s global): durante pruebas de carga se ve cómo reacciona el sistema
+      # segundo a segundo. Coste bajo: pocas series por pod.
+      interval: 5s

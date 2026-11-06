@@ -57,10 +57,10 @@ Este proyecto enseña conceptos clave como la escalabilidad horizontal, la optim
 
 Estado y matices respecto al diagrama:
 
-- **Temporal queda fuera del camino de cada petición** (un workflow tarda de milisegundos a segundos, incompatible con p99 < 50 ms). Se usa para trabajo lento en segundo plano. Primer workflow: `PrescaleForEvent`, que sube el mínimo del HPA antes de un evento conocido y lo restaura después ([docs/temporal.md](docs/operaciones/temporal.md)).
-- **Conexiones simultáneas y balanceador:** en local se entra por ingress-nginx. Para escalar por conexiones simultáneas en producción, las conexiones deben llegar a los pods a través de un balanceador L4 (NLB): un proxy L7 (nginx, ALB) es quien sostendría los 5M de conexiones y los pods solo verían su pool keep-alive ([docs/kubernetes.md](docs/operaciones/kubernetes.md)).
+- **Temporal queda fuera del camino de cada petición** (un workflow tarda de milisegundos a segundos, incompatible con p99 < 50 ms). Se usa para trabajo lento en segundo plano. Primer workflow: `PrescaleForEvent`, que sube el mínimo del HPA antes de un evento conocido y lo restaura después ([docs/operaciones/temporal.md](docs/operaciones/temporal.md)).
+- **Conexiones simultáneas y balanceador:** en local se entra por ingress-nginx. Para escalar por conexiones simultáneas en producción, las conexiones deben llegar a los pods a través de un balanceador L4 (NLB): un proxy L7 (nginx, ALB) es quien sostendría los 5M de conexiones y los pods solo verían su pool keep-alive ([docs/operaciones/kubernetes.md](docs/operaciones/kubernetes.md#autoescalado-y-disponibilidad)).
 - **Logs a S3:** la caja "AWS S3 (Logs)" del diagrama aún no existe; es un workflow de Temporal candidato ([docs/operaciones/temporal.md](docs/operaciones/temporal.md#otros-workflows-candidatos)).
-- **Observabilidad:** Prometheus + Grafana dentro del clúster en local; en producción, fuera del clúster con Amazon Managed Prometheus y Amazon Managed Grafana ([docs/monitorizacion.md](docs/operaciones/monitorizacion.md#monitorización-en-producción)).
+- **Observabilidad:** Prometheus + Grafana dentro del clúster en local; en producción, fuera del clúster con Amazon Managed Prometheus y Amazon Managed Grafana ([docs/operaciones/monitorizacion.md](docs/operaciones/monitorizacion.md#monitorización-en-producción)).
 
 ## Cómo empezar
 
@@ -87,8 +87,13 @@ task load:capacity      # capacidad de un pod
 task load:scaling       # el HPA escala por conexiones
 ```
 
-La documentación está en [docs/](docs/README.md), agrupada en [servicio](docs/servicio) (el código
-en Rust) y [operaciones](docs/operaciones) (despliegue, monitorización y Temporal).
+| Carpeta | Qué contiene |
+| --- | --- |
+| [`content-delivery/`](content-delivery) | El servicio en Rust y sus pruebas e2e |
+| [`temporal/`](temporal) | El worker de Temporal en Go |
+| [`k8s/`](k8s) | Manifiestos de Kustomize: base, overlays `local`/`eks`, monitorización y Temporal |
+| [`loadtest/`](loadtest) | Script de k6 y sus Jobs de Kubernetes |
+| [`docs/`](docs/README.md) | Documentación, agrupada en [servicio](docs/servicio) (el código en Rust) y [operaciones](docs/operaciones) (entorno, despliegue, monitorización, Temporal y pruebas) |
 
 ## Despliegue a cloud
 
@@ -98,9 +103,31 @@ queden valores `<...>` (bucket, rol IRSA, imagen en ECR). Lo que falta para prod
 
 ## Pruebas de carga
 
-k6 como Job dentro del clúster, con sus métricas en Prometheus y Grafana. 5M de conexiones no caben en
-un portátil: se mide la capacidad de un pod y se extrapola. Procedimiento, resultados y conclusiones
-en [docs/pruebas.md](docs/pruebas.md).
+k6 como contenedor de Docker fuera del clúster (o como Job dentro), con sus métricas en Prometheus y
+Grafana. 5M de conexiones no caben
+en un portátil: se mide la capacidad de un pod y se extrapola.
+
+1. Escenarios (`loadtest/k6.js`, perfil `PROFILE`):
+   - `connections`: espectadores con una conexión keep-alive que piden un segmento cada 6 s, en
+     escalones hasta 9 000 (un pod) o 3 000 conexiones (HPA de 2 a 6 pods)
+   - `scaling`: tasa de llegada de 100 a 1 500 req/s y vuelta, ~16 min
+
+2. Ejecuta el escenario en el clúster de pruebas; con `:external`, k6 corre como contenedor de
+   Docker fuera del clúster y no gasta la CPU del nodo (recomendado):
+```bash
+task load:capacity:external   # capacidad de un pod con k6 fuera del clúster: 9 000 conexiones (~25 min)
+task load:scaling:external    # el HPA escala por conexiones, k6 fuera del clúster (~13 min)
+task load:capacity            # con k6 como Job dentro del clúster: 4 500 conexiones (~13 min)
+task load:scaling             # ídem, k6 dentro del clúster (~13 min)
+task load:rps                 # escalado por tasa de llegada a través del Ingress (~16 min)
+```
+
+3. Observa los resultados en Grafana, dashboard *Content Delivery: load, scaling and resources*
+   (`task grafana`): conexiones por pod frente al objetivo del HPA, réplicas, latencia del servidor
+   y del cliente, memoria y CPU por pod.
+
+Detalle de cada ejecución: [docs/operaciones/pruebas.md](docs/operaciones/pruebas.md). Conclusiones y
+extrapolación a estas métricas: [docs/README.md](docs/README.md#resultados-y-extrapolación-a-los-objetivos-del-readme).
 
 ## Métricas objetivo
 
@@ -115,13 +142,13 @@ toda la flota.
 | Tasa de error | < 0.1% | `http_requests_total` por estado y k6 (`http_req_failed`) |
 | Punto de saturación | Conexiones por pod a partir de las que sube la latencia o la memoria se acerca al límite | Escalones de la prueba de capacidad por pod |
 
-El resultado de cada métrica está en [docs/estado.md](docs/estado.md#objetivos-del-readme).
+El resultado de cada métrica está en [docs/estado.md](docs/estado.md#objetivos-del-readme) y la extrapolación a 5M en [docs/README.md](docs/README.md#extrapolación-a-los-objetivos-del-readme).
 
 ## Pruebas (unit / integración)
 
 Unitarias en Rust, end-to-end en Rust contra LocalStack (18 pruebas, en Docker Compose, en el host o
 en el clúster) y del workflow de Temporal en Go. Comandos en [Cómo empezar](#cómo-empezar); detalle
-en [docs/pruebas.md](docs/pruebas.md).
+en [docs/operaciones/pruebas.md](docs/operaciones/pruebas.md).
 
 ## Complejidades técnicas
 

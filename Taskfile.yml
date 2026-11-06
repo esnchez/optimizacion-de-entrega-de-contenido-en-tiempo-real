@@ -4,7 +4,7 @@
 version: "3"
 
 vars:
-  COMPOSE: docker compose -f src/tests/compose.yaml
+  COMPOSE: docker compose
   # --ignored: las pruebas e2e están marcadas #[ignore] para que `cargo test` no las lance.
   # --test-threads=1: varias pruebas cuentan llamadas a S3 con las métricas del servicio.
   E2E: cargo test --test e2e -- --ignored --test-threads=1
@@ -21,13 +21,13 @@ tasks:
 
   test:
     desc: Pruebas unitarias
-    dir: src
+    dir: content-delivery
     cmds:
       - cargo test
 
   lint:
     desc: Formato y clippy
-    dir: src
+    dir: content-delivery
     cmds:
       - cargo fmt --check
       - cargo clippy --all-targets -- -D warnings
@@ -55,7 +55,7 @@ tasks:
 
   run:
     desc: Ejecuta el servicio en el host contra LocalStack (necesita `task env:up`)
-    dir: src
+    dir: content-delivery
     env:
       S3_BUCKET: content
       S3_ENDPOINT: http://127.0.0.1:4566
@@ -69,7 +69,7 @@ tasks:
       - cargo run
 
   # ---------------------------------------------------------------------------------------------
-  # Pruebas end-to-end (src/tests/e2e.rs)
+  # Pruebas end-to-end (content-delivery/tests/e2e.rs)
   # ---------------------------------------------------------------------------------------------
 
   e2e:
@@ -113,7 +113,7 @@ tasks:
 
   e2e:run:
     internal: true
-    dir: src
+    dir: content-delivery
     env:
       BASE_URL: "{{.BASE_URL}}"
       OPS_URL: "{{.OPS_URL | default .BASE_URL}}"
@@ -143,7 +143,7 @@ tasks:
       # La caché de capas de Docker hace que esto tarde segundos si el código no ha cambiado.
       # --provenance=false: Docker Desktop adjunta metadatos de procedencia con la hora del build, y
       # el ID de la imagen cambiaría en cada build aunque todo saliera de la caché.
-      - docker build --provenance=false -t content-delivery:local src
+      - docker build --provenance=false -t content-delivery:local content-delivery
       # Tarea aparte para que el ID de la imagen se lea después de construirla.
       - task: deploy:local:apply
 
@@ -159,11 +159,11 @@ tasks:
     cmds:
       - task: image:load
         vars: { IMAGE: content-delivery, TAG: "{{.TAG}}" }
-      # Overlay temporal sobre src/k8s/overlays/local que solo cambia la etiqueta de la imagen: lo
+      # Overlay temporal sobre k8s/overlays/local que solo cambia la etiqueta de la imagen: lo
       # mismo que hacía `sed` en el antiguo deploy.sh, pero con el mecanismo propio de Kustomize.
       - mkdir -p .task/deploy-local
       - >-
-        printf 'resources:\n  - ../../src/k8s/overlays/local\nimages:\n  - name: content-delivery\n    newTag: %s\n'
+        printf 'resources:\n  - ../../k8s/overlays/local\nimages:\n  - name: content-delivery\n    newTag: %s\n'
         "{{.TAG}}" > .task/deploy-local/kustomization.yaml
       - kubectl apply -k .task/deploy-local
       - kubectl -n localstack rollout status deploy/localstack --timeout=300s
@@ -184,12 +184,12 @@ tasks:
       - minikube image tag {{.IMAGE}}:{{.TAG}} {{.IMAGE}}:local
 
   # ---------------------------------------------------------------------------------------------
-  # Temporal (src/temporal, src/k8s/temporal; guía en docs/operaciones/temporal.md)
+  # Temporal (temporal/, k8s/temporal/; guía en docs/operaciones/temporal.md)
   # ---------------------------------------------------------------------------------------------
 
   temporal:test:
     desc: Pruebas del workflow con el entorno de pruebas de Temporal (sin servidor)
-    dir: src/temporal
+    dir: temporal
     cmds:
       - go vet ./...
       - go test ./...
@@ -203,7 +203,7 @@ tasks:
       - sh: '[ "{{.CONTEXT}}" = "minikube" ]'
         msg: "kubectl apunta a '{{.CONTEXT}}', no a minikube: kubectl config use-context minikube"
     cmds:
-      - docker build --provenance=false -t temporal-worker:local src/temporal
+      - docker build --provenance=false -t temporal-worker:local temporal
       - task: temporal:deploy:apply
 
   temporal:deploy:apply:
@@ -217,7 +217,7 @@ tasks:
         vars: { IMAGE: temporal-worker, TAG: "{{.TAG}}" }
       - mkdir -p .task/deploy-temporal
       - >-
-        printf 'resources:\n  - ../../src/k8s/temporal\nimages:\n  - name: temporal-worker\n    newTag: %s\n'
+        printf 'resources:\n  - ../../k8s/temporal\nimages:\n  - name: temporal-worker\n    newTag: %s\n'
         "{{.TAG}}" > .task/deploy-temporal/kustomization.yaml
       - kubectl apply -k .task/deploy-temporal
       - kubectl -n temporal rollout status deploy/temporal --timeout=300s
@@ -278,15 +278,15 @@ tasks:
       CONTEXT:
         sh: kubectl config current-context
       RENDERED:
-        sh: kubectl kustomize src/k8s/overlays/eks
+        sh: kubectl kustomize k8s/overlays/eks
     preconditions:
       - sh: '{{if contains "<" .RENDERED}}false{{else}}true{{end}}'
-        msg: "El overlay de EKS aún tiene valores <...> sin completar (src/k8s/overlays/eks/kustomization.yaml)"
+        msg: "El overlay de EKS aún tiene valores <...> sin completar (k8s/overlays/eks/kustomization.yaml)"
       - sh: '[ "{{.CONTEXT}}" != "minikube" ]'
         msg: "kubectl apunta a minikube: cambia al contexto del clúster de EKS"
     prompt: "¿Aplicar el overlay de EKS en el contexto '{{.CONTEXT}}'?"
     cmds:
-      - kubectl apply -k src/k8s/overlays/eks
+      - kubectl apply -k k8s/overlays/eks
       - kubectl -n cdn rollout status deploy/content-delivery --timeout=300s
       - kubectl -n cdn get pods,svc,ingress,hpa
 
@@ -300,11 +300,11 @@ tasks:
       - >-
         helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack
         --version 92.10.1 -n monitoring --create-namespace
-        -f src/k8s/monitoring/kube-prometheus-stack-values.yaml --wait
+        -f k8s/monitoring/kube-prometheus-stack-values.yaml --wait
       - >-
         helm upgrade --install prometheus-adapter prometheus-community/prometheus-adapter
-        --version 5.3.0 -n monitoring -f src/k8s/monitoring/prometheus-adapter-values.yaml --wait
-      - kubectl apply -k src/k8s/monitoring
+        --version 5.3.0 -n monitoring -f k8s/monitoring/prometheus-adapter-values.yaml --wait
+      - kubectl apply -k k8s/monitoring
       # El addon de ingress de minikube trae las métricas apagadas, y reiniciar minikube las vuelve
       # a apagar. Solo se parchea si falta el flag (aplicarlo dos veces duplicaría el argumento).
       - '{{if not (contains "enable-metrics=true" .INGRESS_ARGS)}}kubectl -n ingress-nginx patch deploy ingress-nginx-controller --type=json -p ''[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--enable-metrics=true"}]''{{else}}echo "ingress-nginx ya tiene las métricas activadas"{{end}}'
@@ -332,7 +332,7 @@ tasks:
       - kubectl -n localstack port-forward svc/localstack 4567:4566
 
   # ---------------------------------------------------------------------------------------------
-  # Pruebas de carga en el clúster (k6 como Job; resultados en Grafana y en docs/pruebas.md)
+  # Pruebas de carga en el clúster (k6 como Job; resultados en Grafana y en docs/operaciones/pruebas.md)
   # ---------------------------------------------------------------------------------------------
 
   load:capacity:
@@ -353,21 +353,73 @@ tasks:
   load:connections:
     internal: true
     cmds:
-      - kubectl -n cdn create configmap k6-script --from-file=local.js=loadtest/local.js --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n cdn create configmap k6-script --from-file=k6.js=loadtest/k6.js --dry-run=client -o yaml | kubectl apply -f -
       - >-
         kubectl -n cdn create configmap k6-connections-params
         --from-literal=CONNECTIONS={{.CONNECTIONS}} --from-literal=STEPS={{.STEPS}}
         --dry-run=client -o yaml | kubectl apply -f -
       - kubectl -n cdn delete job k6-connections --ignore-not-found
-      - kubectl -n cdn apply -f loadtest/k8s-job-connections.yaml
+      - kubectl -n cdn apply -f loadtest/k8s/k6-connections-job.yaml
       - kubectl -n cdn wait --for=condition=ready pod -l job-name=k6-connections --timeout=180s
       - kubectl -n cdn logs -f job/k6-connections
+
+  # k6 FUERA del clúster: contenedor de Docker en la red del nodo de minikube contra NodePorts
+  # temporales (loadtest/external/nodeports.yaml). k6 no gasta la CPU (4) ni la memoria (6 GiB) del
+  # nodo, que quedan para el servicio; sí comparte la CPU del portátil.
+
+  load:capacity:external:
+    desc: "Ejecución A con k6 fuera del clúster: 1 pod, CONNECTIONS (9 000) en STEPS (6) escalones, ~25 min"
+    vars:
+      CONNECTIONS: '{{.CONNECTIONS | default "9000"}}'
+      STEPS: '{{.STEPS | default "6"}}'
+    cmds:
+      - kubectl -n cdn patch hpa content-delivery --type=merge -p '{"spec":{"minReplicas":1,"maxReplicas":1}}'
+      - defer: kubectl -n cdn patch hpa content-delivery --type=merge -p '{"spec":{"minReplicas":2,"maxReplicas":6}}'
+      - kubectl -n cdn rollout status deploy/content-delivery --timeout=300s
+      - task: load:connections:external
+        vars: { CONNECTIONS: "{{.CONNECTIONS}}", STEPS: "{{.STEPS}}" }
+
+  load:scaling:external:
+    desc: "Ejecución B con k6 fuera del clúster: HPA 2-6, 3 000 conexiones en 3 escalones (~13 min). MAX_CONNECTION_AGE_SECS=0 desactiva el reciclado durante la prueba"
+    vars:
+      REPLICAS:
+        sh: kubectl -n cdn get hpa content-delivery -o jsonpath="{.status.currentReplicas}/{.spec.minReplicas}"
+    preconditions:
+      # Una ejecución que empieza con réplicas de la anterior muestra una reducción, no un escalado.
+      - sh: '[ "{{.REPLICAS}}" = "2/2" ]'
+        msg: "El HPA tiene {{.REPLICAS}} réplicas (actual/mínimo): espera a que vuelva a 2/2 (~5 min tras la última carga)."
+    cmds:
+      # Variable explícita en el contenedor: tiene prioridad sobre el ConfigMap del overlay (120 s).
+      # Se quita al terminar, y el Deployment vuelve al valor del overlay.
+      - '{{if .MAX_CONNECTION_AGE_SECS}}kubectl -n cdn set env deploy/content-delivery MAX_CONNECTION_AGE_SECS={{.MAX_CONNECTION_AGE_SECS}}{{else}}echo "MAX_CONNECTION_AGE_SECS del overlay"{{end}}'
+      - defer: '{{if .MAX_CONNECTION_AGE_SECS}}kubectl -n cdn set env deploy/content-delivery MAX_CONNECTION_AGE_SECS-{{else}}true{{end}}'
+      - kubectl -n cdn rollout status deploy/content-delivery --timeout=300s
+      - task: load:connections:external
+        vars: { CONNECTIONS: "3000", STEPS: "3" }
+
+  load:connections:external:
+    internal: true
+    vars:
+      NODE_IP:
+        sh: docker inspect -f "{{`{{.NetworkSettings.Networks.minikube.IPAddress}}`}}" minikube
+    cmds:
+      - kubectl apply -f loadtest/external/nodeports.yaml
+      - defer: kubectl delete -f loadtest/external/nodeports.yaml --ignore-not-found
+      - >-
+        docker run --rm --name k6-external --network minikube
+        -v "{{.ROOT_DIR}}/loadtest:/scripts:ro"
+        -e PROFILE=connections -e CONNECTIONS={{.CONNECTIONS}} -e STEPS={{.STEPS}}
+        -e STEP_RAMP=1m -e STEP_HOLD=3m -e THINK_TIME=6
+        -e BASE_URL=http://{{.NODE_IP}}:30080
+        -e K6_PROMETHEUS_RW_SERVER_URL=http://{{.NODE_IP}}:30090/api/v1/write
+        -e K6_FEATURES=native-histograms -e K6_PROMETHEUS_RW_PUSH_INTERVAL=5s
+        grafana/k6:2.3.0 run --quiet --out experimental-prometheus-rw /scripts/k6.js
 
   load:rps:
     desc: "Peticiones por segundo que suben y bajan a través del Ingress (PROFILE=scaling, ~16 min)"
     cmds:
-      - kubectl -n cdn create configmap k6-script --from-file=local.js=loadtest/local.js --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n cdn create configmap k6-script --from-file=k6.js=loadtest/k6.js --dry-run=client -o yaml | kubectl apply -f -
       - kubectl -n cdn delete job k6 --ignore-not-found
-      - kubectl -n cdn apply -f loadtest/k8s-job.yaml
+      - kubectl -n cdn apply -f loadtest/k8s/k6-job.yaml
       - kubectl -n cdn wait --for=condition=ready pod -l job-name=k6 --timeout=180s
       - kubectl -n cdn logs -f job/k6

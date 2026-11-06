@@ -14,8 +14,7 @@ kubectl -n cdn rollout restart deploy/content-delivery   # pods nuevos, misma im
 ```
 
 Los rollouts no tienen tiempo de inactividad: un pod nuevo arranca antes de que se detenga uno antiguo,
-y los pods antiguos terminan las descargas en curso (verificado: 0 peticiones fallidas de 230k durante un
-reinicio con carga).
+y los pods antiguos terminan las descargas en curso ([por qué](kubernetes.md#el-deployment)).
 
 **Los cambios de configuración** pasan por el generador de ConfigMap de los ficheros kustomization. Un
 valor cambiado crea un nombre de ConfigMap nuevo y un rollout. No hagas `kubectl edit` del ConfigMap:
@@ -65,20 +64,14 @@ aparece con objetos subidos por partes (subidas multipart, p. ej. la AWS CLI par
 podría silenciar desactivando la validación del checksum de respuesta para esas peticiones, pero eso
 también eliminaría la validación donde sí funciona, así que de momento se deja como está.
 
-## Memoria
+## Memoria y apagado
 
-Un pod usa ~12 MiB en reposo o sirviendo objetos pequeños en caché. El peor caso es aproximadamente
-`BODY_CACHE_MAX_BYTES` + `MAX_CONCURRENT_REQUESTS` × `STREAM_CHUNK_BYTES` + ~60 MiB, que debe
-quedarse por debajo del límite de 768Mi. Si los pods reciben `OOMKilled`, baja uno de esos ajustes o sube el
-límite. Cámbialos a la vez.
-
-## Comportamiento al apagarse
-
-Al terminar: preStop 5 s → SIGTERM → `/readyz` devuelve 503 → deja de aceptar conexiones → termina
-las respuestas en curso → espera `SHUTDOWN_FLUSH_SECS` (5 s) a que se vacíen los buffers de los sockets → sale.
-Todo debe caber en `terminationGracePeriodSeconds` (60 s), o Kubernetes mata el pod y
-corta las descargas que queden. Los clientes que descarguen ficheros muy grandes deberían usar `/url/{key}`
-(prefirmada, directamente desde S3).
+- **`OOMKilled`:** un pod usa ~12 MiB en reposo; el peor caso lo fijan `BODY_CACHE_MAX_BYTES`,
+  `MAX_CONCURRENT_REQUESTS` y `STREAM_CHUNK_BYTES` frente al límite de 768Mi. Baja uno de ellos o sube
+  el límite, a la vez ([presupuesto](kubernetes.md#el-deployment)).
+- **Descargas cortadas al reiniciar:** la secuencia de apagado debe caber en
+  `terminationGracePeriodSeconds` (60 s) ([apagado ordenado](../servicio/arquitectura.md#apagado-ordenado)).
+  Los ficheros muy grandes deberían descargarse por `/url/{key}` (prefirmada, directamente desde S3).
 
 ## Depuración dentro de un pod
 
@@ -88,7 +81,7 @@ La imagen es distroless, así que no hay shell. Adjunta un contenedor de depurac
 kubectl -n cdn debug -it <pod> --image=busybox:1.37 --target=content-delivery
 ```
 
-## Entorno local
+## Clúster local
 
 ```bash
 minikube status
@@ -97,12 +90,7 @@ minikube delete        # lo elimina por completo
 kubectl -n localstack logs deploy/localstack | grep "AWS s3"   # cada llamada a S3 que hace el servicio
 ```
 
-LocalStack guarda los datos en memoria: después de que se reinicie su pod, el bucket se vuelve a crear solo con
-`hello.txt`.
-
-- **Los port-forwards** (`task grafana`, `task temporal:ui`, `task cluster:forward`) se cortan si se
-  reinicia el pod de destino o se para minikube: vuelve a lanzar la tarea.
-- **Tras `minikube start`**, ejecuta `task monitoring:install`: el reinicio desactiva las métricas de
-  ingress-nginx. El historial de Temporal se pierde si se recrea su pod (SQLite en un `emptyDir`).
-- **En PowerShell**, `minikube` y `kubectl` (1.37) deben estar en el PATH; si no, `kubectl` resuelve
-  al 1.32 de Docker Desktop, cinco versiones por detrás del clúster.
+LocalStack guarda los datos en memoria: después de que se reinicie su pod, el bucket se vuelve a
+crear solo con los objetos del script de inicialización. El historial de Temporal se pierde si se
+recrea su pod (SQLite en un `emptyDir`). Tras `minikube start` y si se cortan los port-forwards:
+[problemas encontrados](kubernetes.md#problemas-encontrados).

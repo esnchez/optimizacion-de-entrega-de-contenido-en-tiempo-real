@@ -1,7 +1,7 @@
 # Temporal: workflow de pre-escalado
 
 Un workflow sencillo para aprender cómo funciona Temporal y, sobre todo, cómo saber que funciona.
-Código en [`src/temporal/`](../../src/temporal), manifiestos en [`src/k8s/temporal/`](../../src/k8s/temporal),
+Código en [`temporal/`](../../temporal), manifiestos en [`k8s/temporal/`](../../k8s/temporal),
 tareas `task temporal:*` en el [`Taskfile.yml`](../../Taskfile.yml).
 
 ## El caso de uso: `PrescaleForEvent`
@@ -81,11 +81,11 @@ en Rust es el plano de datos ([candidatos](#otros-workflows-candidatos)).
 
 | Fichero | Qué es |
 | --- | --- |
-| `src/k8s/temporal/server.yaml` | Servidor de desarrollo de Temporal (`temporalio/temporal:1.9.1`): frontend, history, matching, UI y SQLite en un proceso. SQLite en un `emptyDir`: el historial sobrevive a reinicios del contenedor, no a borrar el pod |
-| `src/k8s/temporal/worker.yaml` | El worker (imagen `temporal-worker`, construida desde `src/temporal/Dockerfile`), su ServiceAccount y el Service de métricas |
-| `src/k8s/temporal/rbac.yaml` | Role en `cdn`: `get`/`patch` sobre el HPA `content-delivery` (incluidas sus anotaciones de lease) y `get` sobre su Deployment. Nada más |
-| `src/k8s/monitoring/servicemonitor-temporal.yaml` | Scraping del servidor y del worker, y las alertas |
-| `src/k8s/monitoring/dashboards/temporal.json` | Dashboard de Grafana |
+| `k8s/temporal/server.yaml` | Servidor de desarrollo de Temporal (`temporalio/temporal:1.9.1`): frontend, history, matching, UI y SQLite en un proceso. SQLite en un `emptyDir`: el historial sobrevive a reinicios del contenedor, no a borrar el pod |
+| `k8s/temporal/worker.yaml` | El worker (imagen `temporal-worker`, construida desde `temporal/Dockerfile`), su ServiceAccount y el Service de métricas |
+| `k8s/temporal/rbac.yaml` | Role en `cdn`: `get`/`patch` sobre el HPA `content-delivery` (incluidas sus anotaciones de lease) y `get` sobre su Deployment. Nada más |
+| `k8s/monitoring/servicemonitor-temporal.yaml` | Scraping del servidor y del worker, y las alertas |
+| `k8s/monitoring/dashboards/temporal.json` | Dashboard de Grafana |
 
 ## Cómo se usa
 
@@ -207,6 +207,13 @@ sustituye las activities por mocks y salta los temporizadores. Seis pruebas: el 
 termina sin tocar el HPA, los reintentos hasta que los pods están listos, que el mínimo se restaura
 aunque los pods nunca lleguen a estar listos, y la decisión del lease (libre, propio, ajeno vigente,
 ajeno caducado, fecha ilegible).
+
+## Problemas encontrados
+
+- **`localhost` resuelve también a `::1`** y el servidor de desarrollo solo escucha en IPv4: la CLI
+  usa `--address 127.0.0.1:7233`.
+- **El worker puede arrancar antes que el servidor**: reintenta la conexión en lugar de salir, para
+  evitar reinicios del pod y falsas alertas de `TemporalWorkerDown`.
 
 ## Otros workflows candidatos
 

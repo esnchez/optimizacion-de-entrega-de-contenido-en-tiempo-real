@@ -1,0 +1,89 @@
+# LocalStack (S3 simulado) en su propio namespace: hace el papel de AWS, fuera del namespace
+# "cdn". Necesita root, que el perfil "restricted" de "cdn" no permitiría.
+# Almacenamiento efímero: al reiniciar el pod se pierden los objetos (el bucket se recrea).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: localstack
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: localstack-init
+  namespace: localstack
+data:
+  # LocalStack ejecuta los scripts de ready.d cuando está listo: crea el bucket del servicio.
+  # Idempotente: no falla ni duplica si se ejecuta otra vez.
+  create-bucket.sh: |
+    #!/bin/sh
+    awslocal s3api head-bucket --bucket content 2>/dev/null || awslocal s3 mb s3://content
+    printf 'hello world' > /tmp/hello.txt
+    awslocal s3 cp /tmp/hello.txt s3://content/hello.txt --content-type text/plain
+    # Objetos de las pruebas de carga (loadtest/k6.js): un segmento de vídeo de 64 KiB (se
+    # sirve desde memoria) y un fichero de 3 MiB para HEAD y Range (se sirve desde S3).
+    head -c 65536 /dev/urandom > /tmp/segment.bin
+    awslocal s3 cp /tmp/segment.bin s3://content/videos/segment.bin --content-type video/mp2t
+    head -c 3145728 /dev/urandom > /tmp/big.bin
+    awslocal s3 cp /tmp/big.bin s3://content/videos/big.bin --content-type application/octet-stream
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: localstack
+  namespace: localstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: localstack
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: localstack
+    spec:
+      containers:
+        - name: localstack
+          image: localstack/localstack:4.14.0
+          ports:
+            - name: edge
+              containerPort: 4566
+          env:
+            - name: SERVICES
+              value: s3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              memory: 1536Mi
+          readinessProbe:
+            httpGet:
+              path: /_localstack/health
+              port: edge
+            periodSeconds: 5
+          volumeMounts:
+            # subPath: monta solo el script. Montando el directorio entero, LocalStack también
+            # ejecutaría la copia interna de Kubernetes (..data/create-bucket.sh): dos veces.
+            - name: init
+              mountPath: /etc/localstack/init/ready.d/create-bucket.sh
+              subPath: create-bucket.sh
+      volumes:
+        - name: init
+          configMap:
+            name: localstack-init
+            defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: localstack
+  namespace: localstack
+spec:
+  selector:
+    app.kubernetes.io/name: localstack
+  ports:
+    - name: edge
+      port: 4566
+      targetPort: edge

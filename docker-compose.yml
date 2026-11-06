@@ -1,0 +1,42 @@
+# Entorno de las pruebas end-to-end (content-delivery/tests/e2e.rs). Se usa a través de Task (Taskfile.yml):
+#   task e2e        LocalStack + imagen del servicio, pruebas, y limpieza
+#   task env:up     solo LocalStack, para `task run` + `task e2e:dev`
+# Las pruebas crean el bucket y sus objetos: aquí no hace falta ningún paso de inicialización.
+name: content-delivery-e2e
+
+services:
+  localstack:
+    image: localstack/localstack:4.14.0
+    environment:
+      SERVICES: s3
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Perfil "app": solo con `task e2e`. En el día a día el servicio corre en el host con `task run`,
+  # porque la imagen release (LTO) tarda ~10 min en compilarse y `cargo run` unos segundos.
+  app:
+    profiles: ["app"]
+    build:
+      context: content-delivery
+    image: content-delivery:e2e
+    environment:
+      S3_BUCKET: content
+      S3_ENDPOINT: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      # Valores cortos para que las pruebas de caducidad y de reciclado de conexiones duren segundos.
+      METADATA_CACHE_TTL_SECS: "2"
+      BODY_CACHE_TTL_SECS: "2"
+      MAX_CONNECTION_AGE_SECS: "3"
+    ports:
+      - "8089:8080"
+    depends_on:
+      localstack:
+        condition: service_healthy
+    # Sin healthcheck: la imagen distroless no tiene curl ni shell. Las pruebas esperan a /readyz.

@@ -1,0 +1,43 @@
+# Puertos del nodo de minikube para k6 FUERA del clúster (`task load:capacity:external`,
+# `task load:scaling:external`).
+#
+# k6 corre como contenedor de Docker en la red `minikube` (la del nodo) y llega a estos servicios
+# por <IP del nodo>:<nodePort>. Así k6 no consume la CPU ni la memoria del nodo (4 CPU / 6 GiB),
+# que quedan para el servicio. El NodePort sigue siendo balanceo L4 de kube-proxy: cada conexión
+# de k6 es una conexión en un pod, como con el Service interno o un NLB.
+# Solo existen mientras dura la prueba: la tarea los borra al terminar.
+apiVersion: v1
+kind: Service
+metadata:
+  name: k6-external-content-delivery
+  namespace: cdn
+  labels:
+    app.kubernetes.io/part-of: content-delivery-loadtest
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: content-delivery
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080
+---
+# Remote write de las métricas de k6 a Prometheus.
+apiVersion: v1
+kind: Service
+metadata:
+  name: k6-external-prometheus
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: content-delivery-loadtest
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: prometheus
+    operator.prometheus.io/name: kube-prometheus-stack-prometheus
+  ports:
+    - name: http-web
+      port: 9090
+      targetPort: 9090
+      nodePort: 30090

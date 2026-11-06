@@ -1,0 +1,52 @@
+# Alertas del servicio. Sin Alertmanager en local: se ven en Prometheus (/alerts) y Grafana.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: content-delivery
+  namespace: cdn
+spec:
+  groups:
+    - name: content-delivery
+      rules:
+        - alert: ContentDeliveryP99AboveTarget
+          expr: |
+            histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="cdn", path="/content/{*key}"}[2m]))) > 0.05
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: p99 of /content is above the 50 ms target
+        - alert: ContentDeliveryLoadShedding
+          expr: sum(rate(http_requests_shed_total{namespace="cdn"}[1m])) > 0
+          for: 1m
+          labels: {severity: warning}
+          annotations:
+            summary: Pods are rejecting requests with 503 (MAX_CONCURRENT_REQUESTS reached)
+        - alert: ContentDeliveryErrorRate
+          expr: |
+            sum(rate(http_requests_total{namespace="cdn", status=~"5.."}[5m]))
+              / sum(rate(http_requests_total{namespace="cdn"}[5m])) > 0.001
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: More than 0.1% of requests fail with 5xx
+        - alert: ContentDeliveryHPAAtMax
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace="cdn", horizontalpodautoscaler="content-delivery"}
+              >= kube_horizontalpodautoscaler_spec_max_replicas{namespace="cdn", horizontalpodautoscaler="content-delivery"}
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: The HPA is at maxReplicas; it can't absorb more load
+        - alert: ContentDeliveryMemoryNearLimit
+          expr: |
+            max by (pod) (container_memory_working_set_bytes{namespace="cdn", container="content-delivery"})
+              / max by (pod) (kube_pod_container_resource_limits{namespace="cdn", container="content-delivery", resource="memory"}) > 0.85
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: A pod uses more than 85% of its memory limit (OOMKill risk)
+        - alert: ContentDeliveryPodRestarts
+          expr: increase(kube_pod_container_status_restarts_total{namespace="cdn", container="content-delivery"}[10m]) > 0
+          labels: {severity: warning}
+          annotations:
+            summary: A content-delivery container restarted

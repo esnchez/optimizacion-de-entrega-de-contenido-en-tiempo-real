@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: temporal
+  labels:
+    # Igual que "cdn": los pods no pueden ejecutarse como root ni escalar privilegios.
+    pod-security.kubernetes.io/enforce: restricted

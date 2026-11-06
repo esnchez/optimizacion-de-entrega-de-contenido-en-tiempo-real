@@ -1,0 +1,50 @@
+# Escalado horizontal por conexiones simultáneas por pod (métrica principal) y CPU (red de
+# seguridad). El HPA calcula las réplicas para cada métrica y aplica la mayor. Sube rápido (picos
+# de tráfico) y baja despacio (evita oscilar y perder cachés calientes al eliminar pods).
+# http_connections_open llega al HPA a través de Prometheus Adapter (k8s/monitoring).
+# Sin el adapter, el HPA sigue escalando por CPU. Decisiones en docs/operaciones/kubernetes.md.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: content-delivery
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: content-delivery
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    # Conexiones TCP abiertas por pod (de clientes o de un balanceador L4). 6000 sale de la
+    # prueba de capacidad (docs/operaciones/pruebas.md, ejecución A): un pod sirvió 9000 con p99
+    # de 17 ms en el servidor; a 6000 usa ~190 MiB (+ hasta 256 MiB de caché) y ~0.71 cores.
+    - type: Pods
+      pods:
+        metric:
+          name: http_connections_open
+        target:
+          type: AverageValue
+          averageValue: "6000"
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 20
+          periodSeconds: 60

@@ -90,17 +90,8 @@ Cada pod es sin estado e independiente, así que la capacidad crece linealmente 
 
 ### Sobre el objetivo de 5M de conexiones concurrentes
 
-Ningún proceso por sí solo mantiene 5M de conexiones; es una cifra de flota. Medido con el perfil `connections`
-de `loadtest/local.js`, una conexión cuesta ~38 KiB y ~0.09 milicores (un segmento de 64 KiB cada
-6 s); con 1 core y 768 MiB por pod el objetivo es 6 000 conexiones por pod, así que 5M requiere
-~830 pods, unos 1 000 con margen ([pruebas.md](../pruebas.md#conexiones-simultáneas)). A esa escala el
-límite es el ancho de banda (~440 Gb/s). En la práctica, una CDN (CloudFront) delante de este servicio
-absorbería la mayor parte del tráfico cacheable. La cabecera `Cache-Control` (`CACHE_CONTROL`, por defecto
-`public, max-age=300`) ya está configurada con ese fin.
-
-## Qué medir a continuación
-
-1. Punto de saturación de un solo pod con k6: subir `MAX_CONCURRENT_REQUESTS` hasta que el p99 empiece a subir.
-2. Ratio de aciertos de caché (`cache_requests_total`) con una distribución de claves realista.
-3. Memoria por cada 10k streams concurrentes, para fijar los límites del pod.
-4. Si un asignador de memoria distinto (mimalloc) cambia el p99 bajo carga.
+Ningún proceso por sí solo mantiene 5M de conexiones; es una cifra de flota. Lo que cuesta una
+conexión en un pod, cuántos pods harían falta y por qué a esa escala manda el ancho de banda (y una
+CDN delante) está en la [extrapolación](../README.md#extrapolación-a-los-objetivos-del-readme). La
+cabecera `Cache-Control` (`CACHE_CONTROL`, por defecto `public, max-age=300`) ya está pensada para
+esa CDN.

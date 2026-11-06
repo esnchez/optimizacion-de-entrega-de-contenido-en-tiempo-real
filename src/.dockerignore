@@ -1,5 +1,0 @@
-target/
-.cargo/
-k8s/
-tests/
-temporal/

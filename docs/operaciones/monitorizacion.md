@@ -25,9 +25,9 @@ task monitoring:install
 La tarea es idempotente y hace, en orden:
 
 1. Prometheus, Grafana, kube-state-metrics y node-exporter con el chart kube-prometheus-stack
-   (versión fijada, `src/k8s/monitoring/kube-prometheus-stack-values.yaml`).
+   (versión fijada, `k8s/monitoring/kube-prometheus-stack-values.yaml`).
 2. Prometheus Adapter, que expone `http_connections_open` al HPA (`custom.metrics.k8s.io`).
-3. Nuestros ServiceMonitors, reglas de alerta y dashboard (`kubectl apply -k src/k8s/monitoring`).
+3. Nuestros ServiceMonitors, reglas de alerta y dashboard (`kubectl apply -k k8s/monitoring`).
 4. Las métricas de peticiones del ingress controller de minikube (desactivadas por defecto en el
    addon), solo si no están ya activadas.
 
@@ -65,37 +65,8 @@ cubre el workflow de Temporal ([temporal.md](temporal.md#cómo-saber-que-funcion
 
 ## Lanzar una prueba de carga para observarla
 
-```bash
-task load:rps          # lanza el Job de k6 y sigue sus logs (resumen de k6 al final)
-```
-
-Las pruebas de conexiones simultáneas (`task load:capacity`, `task load:scaling`) están en
-[pruebas.md](../pruebas.md#conexiones-simultáneas).
-
-El perfil por defecto, `PROFILE=scaling`, dura unos 16 minutos y está diseñado para que todas
-las adaptaciones sean visibles:
-
-| Fase | Duración | Carga (tasa de llegada) | Qué observar |
-| --- | --- | --- | --- |
-| Base | 2 min | 100 req/s | Todo plano. 2 pods, CPU ~7% del request. |
-| Rampa | 2 min | 100 → 1 500 req/s | El % de CPU sobre el request sube por encima de la línea discontinua del objetivo del 60% |
-| Pico | 4 min | 1 500 req/s | El HPA añade pods; la utilización vuelve a bajar del objetivo; los pods nuevos asumen su parte |
-| Bajada | 1 min | → 100 req/s | La utilización cae, pero **las réplicas se quedan**: la ventana de reducción de 5 minutos |
-| Cola | 7 min | 100 req/s | Unos 5 min después de la bajada, el HPA elimina pods (como mucho un 20% por minuto) |
-
-Cambia `PEAK_RPS` / `BASE_RPS` en el Job para apretar más. `PROFILE=steady` (con `VUS`,
-`DURATION`) ejecuta usuarios en bucle cerrado sin pausa, lo que es una prueba de saturación más que
-una prueba de adaptación.
-
-**Tasa de llegada, no usuarios.** El perfil de escalado usa `ramping-arrival-rate` de k6: envía N
-peticiones por segundo sea cual sea el tiempo de respuesta, como el tráfico real. Con un número fijo
-de usuarios que nunca hacen pausa, un sistema más lento recibe automáticamente menos carga, lo que
-oculta precisamente el efecto que quieres ver.
-
-**Estado del Job:** k6 termina con código distinto de cero cuando falla un umbral (p. ej. p99 > 50 ms),
-y entonces el Job acaba **Failed**, no Complete. Síguelo con `kubectl logs -f job/k6`, no con
-`kubectl wait --for=condition=complete`, que esperaría para siempre. Los Jobs terminados se conservan
-una hora.
+`task load:rps` (perfil `scaling`, ~16 min) recorre todas las adaptaciones del HPA; las fases, los
+perfiles de conexiones y los resultados están en [pruebas](pruebas.md#perfil-scaling-task-loadrps).
 
 ## Cómo leer el dashboard
 
@@ -174,59 +145,6 @@ Las filas siguen la cadena de causa y efecto: **carga → resultado → escalado
 
 Los rollouts del servicio aparecen como anotaciones naranjas en todas las series temporales.
 
-## Cómo fueron dos ejecuciones (2026-10-19, minikube 4 CPU)
-
-Ambas ejecuciones usaron `PROFILE=scaling`, `PEAK_RPS=1500`, y se reconstruyeron después a partir de
-Prometheus. Juntas muestran las dos mitades del comportamiento del HPA.
-
-### Ejecución 1: escalado hacia arriba desde el mínimo (resolución de 1 minuto)
-
-| Minuto | Carga ofrecida | CPU del servicio (% del request) | Réplicas deseadas / listas | Notas |
-| --- | --- | --- | --- | --- |
-| 0–2 | 100 req/s | 7% | 2 / 2 | Base |
-| 3 | 360 req/s | 19% | 2 / 2 | Empieza la rampa |
-| 4 | 1 060 req/s | 52% | 2 / 2 | Aún por debajo del objetivo |
-| 5 | 1 480 req/s | **76%** | 2 / 2 | Por encima del 60% + tolerancia |
-| 6 | 1 500 req/s | 47% | **3 / 3** | HPA: ceil(2 × 76 / 60) = 3; el pod nuevo estaba listo dentro del mismo minuto |
-| 7–8 | 1 500 req/s | 52–55% | 3 / 3 | Estable, por debajo del objetivo |
-| 9–10 | → 100 req/s | 4% | 3 / 3 | La carga desaparece; el HPA espera (ventana de estabilización) |
-| **15** | 100 req/s | 6% | **2 / 2** | Reducción ~5 min después de la bajada |
-
-### Ejecución 2: arranque sobredimensionado (resolución de 15 segundos alrededor del pico)
-
-La ejecución empezó con **4** réplicas, restos de una prueba corta justo antes. En lugar de
-escalar hacia arriba, el HPA *ajustó el tamaño*:
-
-| Tiempo | Carga ofrecida | % de CPU sobre el request | Deseadas / listas | Notas |
-| --- | --- | --- | --- | --- |
-| 0–5 min | 100 → 1 500 req/s | 9 → 45% | 4 / 4 | Capacidad de sobra; la utilización se queda por debajo del objetivo |
-| 5 min 30 s | 1 500 req/s | 32–45% | **3** / 4 → 3 | Caducó la ventana de reducción de la prueba anterior: ceil(4 × 45 / 60) = 3. Eliminado **con carga máxima**, sin errores. |
-| 6–8 min | 1 500 req/s | 54–61% | 3 / 3 | Dentro de la tolerancia del 10% sobre el objetivo del 60%: sin cambios |
-| 15 min | 100 req/s | ~5% | **2** / 2 | Reducción ~5 min después de la bajada |
-
-553 834 peticiones, **0 fallidas, 0 descartadas**. k6 informó de 4 164 *dropped iterations*: en el pico
-el nodo saturado a veces no podía enviar las 1 500 req/s completas. Los picos cortos de VUs en el panel
-de k6 (hasta 160–260 VUs) son esos mismos momentos: las respuestas se ralentizaron, así que k6 necesitó
-más usuarios concurrentes para mantener la tasa.
-
-### En qué se va el tiempo (ejecución 2)
-
-| Medido en | 100 req/s: p50 / p99 | 1 500 req/s: p50 / p99 |
-| --- | --- | --- |
-| Dentro del servicio (tiempo hasta las cabeceras) | 0.05 / 0.2 ms | 0.05 / 0.9 ms |
-| ingress-nginx | — / < 5 ms¹ | — / 90–113 ms |
-| Cliente k6 | 1.1 / 2 ms | 1.6–3 / 124–207 ms |
-
-¹ El bucket de latencia más bajo de nginx es de 5 ms, así que sus cuantiles no pueden marcar menos.
-
-**CPU en el pico:** el nodo entero usó 3.2 de sus 4 núcleos reales: **k6 1.27, ingress-nginx 1.1,
-el servicio solo 0.43** (≈ 280 µs de CPU por petición, estable en ambas ejecuciones).
-
-**Conclusión.** En este portátil el propio servicio se mantiene por debajo del milisegundo incluso en el
-pico. La latencia de cola que ven los usuarios (p99 > 100 ms) es el nodo compartido y casi saturado, sobre
-todo el generador de carga y el ingress. Para medir los límites reales del servicio, ejecuta k6 en hardware
-separado. En producción, dimensiona la capacidad del ingress con tanto cuidado como la del servicio.
-
 ## Seguimiento desde el terminal
 
 ```bash
@@ -259,7 +177,7 @@ sum by (cache) (rate(cache_requests_total{namespace="cdn", result="miss"}[1m]))
 
 ## Alertas
 
-Definidas en `src/k8s/monitoring/prometheusrule.yaml`, visibles en http://localhost:9090/alerts.
+Definidas en `k8s/monitoring/prometheusrule.yaml`, visibles en http://localhost:9090/alerts.
 No hay Alertmanager en local, así que no se envía nada a ningún sitio.
 
 | Alerta | Salta cuando |
@@ -271,10 +189,10 @@ No hay Alertmanager en local, así que no se envía nada a ningún sitio.
 | `ContentDeliveryMemoryNearLimit` | Un pod por encima del 85% de su límite de memoria durante 5 min |
 | `ContentDeliveryPodRestarts` | Cualquier reinicio de contenedor en 10 min |
 
-Durante las dos ejecuciones observadas la latencia máxima en el *servidor* se mantuvo por debajo de 1 ms,
-así que `ContentDeliveryP99AboveTarget` (que mide el servidor) no saltó aunque fallaran los umbrales de
-cliente de k6. Es intencionado: la alerta trata del servicio, y las cifras de cliente en este portátil
-están dominadas por el nodo.
+`ContentDeliveryP99AboveTarget` mide el servidor, no el cliente: en las pruebas de tasa de llegada no
+saltó aunque fallaran los umbrales de cliente de k6 ([en qué se va el tiempo](pruebas.md#escalado-por-tasa-de-llegada-2026-10-19)).
+Es intencionado: la alerta trata del servicio, y las cifras de cliente en este portátil están
+dominadas por el nodo.
 
 ## Decisiones
 
@@ -288,7 +206,7 @@ están dominadas por el nodo.
 | **node-exporter sin montar el rootfs del host** | Con el driver de Docker `/` no es un montaje compartido y node-exporter no arrancaría |
 | **Receptor de remote-write de Prometheus activado; k6 envía métricas** | Carga y reacción en una misma línea temporal. Latencia de k6 como **histogramas nativos**: sus "trend stats" por defecto (p99 como gauge) son acumulativas desde el inicio de la prueba y siguen altas mucho después de que la latencia se recupere. |
 | **Buckets de latencia por debajo del milisegundo** (100 µs, 250 µs, 500 µs) añadidos al servicio | Las respuestas en caché tardan ~55 µs en p50. Con 1 ms como bucket más bajo todos los cuantiles marcaban un "1 ms" plano. |
-| **Dashboard como código** (JSON en `src/k8s/monitoring/dashboards/`, cargado por el sidecar de Grafana) | Versionado con el servicio; sobrevive a los reinicios de Grafana. Los cambios hechos en la interfaz se pierden: exporta el JSON al repositorio. |
+| **Dashboard como código** (JSON en `k8s/monitoring/dashboards/`, cargado por el sidecar de Grafana) | Versionado con el servicio; sobrevive a los reinicios de Grafana. Los cambios hechos en la interfaz se pierden: exporta el JSON al repositorio. |
 | **Métricas de ingress-nginx activadas parcheando el addon** | Hace falta la latencia en el borde para ver el tiempo pasado fuera del servicio. Un Service + ServiceMonitor hace scrape del puerto 10254. |
 | **Sin almacenamiento persistente, 2 días de retención** | Solo en local: las métricas se pierden si se reinicia el pod de Prometheus. En producción el almacenamiento sale del clúster ([monitorización en producción](#monitorización-en-producción)). |
 

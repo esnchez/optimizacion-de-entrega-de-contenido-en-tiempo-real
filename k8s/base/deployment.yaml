@@ -1,0 +1,100 @@
+# Despliegue de Kubernetes para el microservicio Rust (content-delivery).
+# Cada decisión de este fichero está explicada en docs/operaciones/kubernetes.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: content-delivery
+spec:
+  # Sin "replicas": las gestiona el HPA. Si estuviera aquí, cada "kubectl apply" la reiniciaría.
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: content-delivery
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Primero sube un pod nuevo y solo entonces retira uno viejo: la capacidad nunca baja.
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      # El scraping de Prometheus lo define el ServiceMonitor (k8s/monitoring), no anotaciones.
+      labels:
+        app.kubernetes.io/name: content-delivery
+    spec:
+      serviceAccountName: content-delivery
+      automountServiceAccountToken: false
+      # Presupuesto de apagado: preStop (5s) + drenaje de descargas en curso (~50s) + flush (5s).
+      # Pasado este tiempo Kubernetes envía SIGKILL. Descargas más largas deben usar /url/{key}.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Repartir réplicas entre nodos y zonas: perder un nodo o una zona no tumba el servicio.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: content-delivery
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: content-delivery
+      containers:
+        - name: content-delivery
+          image: content-delivery
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: content-delivery-config
+          resources:
+            # Requests: lo que el scheduler reserva y la base del % de CPU del HPA. 1 core para que
+            # la CPU (60 %) dispare después que el objetivo de 6000 conexiones y quede como red de
+            # seguridad. Medido el 2026-11-05: 0.71 cores a 6000, así que el 60 % llega hacia ~5300;
+            # pendiente subir a 1250m (docs/README.md, "Coste medido por pod").
+            requests:
+              cpu: "1"
+              memory: 256Mi
+            # Límite de memoria pero NO de CPU: el throttling de CFS añade pausas de decenas de ms
+            # que destrozan el p99. La CPU sobrante del nodo se aprovecha en los picos.
+            limits:
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # Liveness: solo "¿el proceso responde?". Nunca depende de S3: si S3 falla, reiniciar
+          # pods no lo arregla y provocaría reinicios en cascada.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Readiness: pasa a 503 al recibir SIGTERM, para dejar de recibir tráfico nuevo.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          lifecycle:
+            # Espera antes de SIGTERM para que ingress y endpoints dejen de enviar tráfico al pod.
+            # "sleep" nativo de Kubernetes (>=1.30): la imagen distroless no tiene binario sleep.
+            preStop:
+              sleep:
+                seconds: 5

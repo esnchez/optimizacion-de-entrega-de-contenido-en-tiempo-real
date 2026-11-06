@@ -1,6 +1,6 @@
 # Crates de Rust
 
-Todas las versiones están fijadas en [`src/Cargo.toml`](../../src/Cargo.toml) y bloqueadas en `Cargo.lock`.
+Todas las versiones están fijadas en [`content-delivery/Cargo.toml`](../../content-delivery/Cargo.toml) y bloqueadas en `Cargo.lock`.
 
 ## Runtime asíncrono
 

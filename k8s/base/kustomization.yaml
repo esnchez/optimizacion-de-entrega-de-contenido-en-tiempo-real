@@ -1,0 +1,48 @@
+# Base común a todos los entornos. Los overlays (local, eks) solo añaden lo que cambia.
+# Decisiones explicadas en docs/operaciones/kubernetes.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cdn
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: content-delivery
+      app.kubernetes.io/part-of: content-delivery-platform
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - pdb.yaml
+
+# Generado con sufijo hash: cambiar un valor cambia el nombre del ConfigMap, lo que dispara
+# un rolling update. Sin esto, los pods seguirían con la configuración antigua.
+configMapGenerator:
+  - name: content-delivery-config
+    literals:
+      - BIND_ADDR=0.0.0.0:8080
+      - S3_BUCKET=content
+      - AWS_REGION=us-east-1
+      - LOG_FORMAT=json
+      - RUST_LOG=info
+      # Dimensionado contra el límite de memoria del contenedor (768Mi), ver docs/operaciones/kubernetes.md:
+      # 256Mi caché de cuerpos + 4000 streams x 64KiB (256Mi) + metadatos y runtime (~60Mi).
+      - MAX_CONCURRENT_REQUESTS=4000
+      - BODY_CACHE_MAX_BYTES=268435456
+      - STREAM_CHUNK_BYTES=65536
+      - REQUEST_TIMEOUT_MS=10000
+      - METADATA_CACHE_TTL_SECS=60
+      - BODY_CACHE_TTL_SECS=60
+      - SHUTDOWN_FLUSH_SECS=5
+      # Recicla las conexiones de más de 5 min para que se repartan entre pods nuevos tras escalar.
+      - MAX_CONNECTION_AGE_SECS=300
+
+images:
+  - name: content-delivery
+    newName: content-delivery
+    newTag: "0.1.0"
